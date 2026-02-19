@@ -390,6 +390,9 @@ export async function fetchDataFromGoogleSheets(sheetId, gid = '0') {
       monthLabels,
       dealDetailsDS,
       dealDetailsPM,
+      rawRows: rows, // Include raw rows for conversion calculations
+      colToStageDS,
+      colToStagePM,
     }
   } catch (error) {
     console.error('Error fetching from Google Sheets:', error)

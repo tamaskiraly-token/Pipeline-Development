@@ -9,6 +9,9 @@ import {
   Legend,
   ResponsiveContainer,
   LabelList,
+  LineChart,
+  Line,
+  ComposedChart,
 } from 'recharts'
 import { fetchDataFromGoogleSheets } from './utils/googleSheets'
 import './App.css'
@@ -110,6 +113,49 @@ function formatMonthLabel(ym) {
   return `${months[parseInt(m, 10) - 1] || m} ${y}`
 }
 
+function formatDate(dateStr) {
+  if (!dateStr || dateStr.trim() === '') return '-'
+  const date = parseDate(dateStr)
+  if (!date) return dateStr
+  
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const day = date.getDate()
+  const month = months[date.getMonth()]
+  const year = date.getFullYear()
+  
+  return `${month} ${day}, ${year}`
+}
+
+function parseDate(dateStr) {
+  if (!dateStr || dateStr.trim() === '') return null
+  
+  // Try parsing as-is first
+  let date = new Date(dateStr)
+  if (!isNaN(date.getTime())) return date
+  
+  // Try parsing formats like "2025-02-19 10:25" or "2025-02-19"
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/)
+  if (isoMatch) {
+    const [, year, month, day, hour = 0, minute = 0, second = 0] = isoMatch
+    date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(minute), parseInt(second))
+    if (!isNaN(date.getTime())) return date
+  }
+  
+  // Try parsing formats like "02/19/2025" or "19/02/2025"
+  const slashMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (slashMatch) {
+    const [, part1, part2, year] = slashMatch
+    // Try both MM/DD/YYYY and DD/MM/YYYY
+    date = new Date(parseInt(year), parseInt(part1) - 1, parseInt(part2))
+    if (!isNaN(date.getTime()) && date.getFullYear() === parseInt(year)) return date
+    
+    date = new Date(parseInt(year), parseInt(part2) - 1, parseInt(part1))
+    if (!isNaN(date.getTime()) && date.getFullYear() === parseInt(year)) return date
+  }
+  
+  return null
+}
+
 function formatAmount(val) {
   if (val == null) return '-'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val)
@@ -152,6 +198,7 @@ function App() {
   const [filterOpen, setFilterOpen] = useState(null)
   const [dataType, setDataType] = useState('count') // 'count' | 'amount' | 'monthlyTransactions'
   const [chartHeight, setChartHeight] = useState(750)
+  const [cohortModal, setCohortModal] = useState(null) // { month, deals: [...] }
   
   useEffect(() => {
     const updateChartHeight = () => {
@@ -394,6 +441,406 @@ function App() {
         : data.monthLabels[data.monthLabels.length - 1]
     return formatMonthLabel(m)
   }, [data?.monthLabels, selectedMonth])
+
+  // Conversion metrics calculations - using raw data to track actual stage entries
+  const overallConversion = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return null
+    
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    
+    // Find the column name for live stage
+    let liveStageCol = null
+    for (const [col, stage] of Object.entries(colToStage)) {
+      if (stage === liveStageShort) {
+        liveStageCol = col
+        break
+      }
+    }
+    
+    if (!liveStageCol) return null
+    
+    const dealsMap = new Map()
+    
+    // Process all rows to find deals that have ANY activity in this pipeline and/or reached live stage
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      
+      const key = `${dealName}|${dealOwner}`
+      if (!dealsMap.has(key)) {
+        dealsMap.set(key, {
+          dealName,
+          dealOwner,
+          hasPipelineActivity: false,
+          enteredLive: false,
+        })
+      }
+      
+      const dealData = dealsMap.get(key)
+      
+      // Check if deal has ANY activity in this pipeline (any stage date filled)
+      const hasActivity = Object.keys(colToStage).some(col => {
+        const dateStr = row[col]
+        return dateStr && dateStr.trim() !== ''
+      })
+      if (hasActivity) {
+        dealData.hasPipelineActivity = true
+      }
+      
+      // Check if deal entered live stage
+      const liveStageDate = row[liveStageCol]
+      if (liveStageDate && liveStageDate.trim() !== '') {
+        dealData.enteredLive = true
+      }
+    })
+    
+    // Count all deals with pipeline activity as total deals
+    const totalDeals = Array.from(dealsMap.values()).filter(d => d.hasPipelineActivity).length
+    // Count all deals that reached Live (regardless of entry point)
+    const convertedDeals = Array.from(dealsMap.values()).filter(d => d.enteredLive).length
+    const conversionRate = totalDeals > 0 ? Math.round((convertedDeals / totalDeals) * 1000) / 10 : 0
+    
+    return { totalDeals, convertedDeals, conversionRate }
+  }, [data, pipeline])
+
+  const stageConversion = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return []
+    
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const stagesConfig = pipeline === 'Direct Sales'
+      ? [['1 - Target', '1 - Target'], ['2 - Qualified', '2 - Qualified'], ['3 - Proposal', '3 - Proposal'], ['4 - Shortlist', '4 - Shortlist'], ['5 - Negotiate', '5 - Negotiate'], ['6 - Contract Out', '6 - Contract Out'], ['7 - Deal Approval', '7 - Deal Approval'], ['8 - Closed Won', '8 - Closed Won'], ['9 - Implementation', '9 - Implementation'], ['10 - Live', '10 - Live']]
+      : [['0 - Dormant', '0 - Dormant'], ['i - Identified or Unknown', 'i - Identified or Unknown'], ['ii - Qualified/ Proposal', 'ii - Qualified/Proposal'], ['iii - Negotiation', 'iii - Negotiation'], ['iv - Closed Won', 'iv - Closed Won'], ['v - Implementation', 'v - Implementation'], ['vi - Live', 'vi - Live']]
+    
+    const stages = stagesConfig.map(([, displayName]) => displayName)
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    
+    // Build map of stage short name to column name
+    const stageToCol = {}
+    for (const [col, stageShort] of Object.entries(colToStage)) {
+      const stageConfig = stagesConfig.find(([short]) => short === stageShort)
+      if (stageConfig) {
+        stageToCol[stageConfig[1]] = col
+      }
+    }
+    
+    const dealsMap = new Map()
+    
+    // Process all rows to track which stages each deal entered
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      
+      const key = `${dealName}|${dealOwner}`
+      if (!dealsMap.has(key)) {
+        dealsMap.set(key, {
+          dealName,
+          dealOwner,
+          stagesEntered: new Set(),
+          enteredLive: false,
+        })
+      }
+      
+      const dealData = dealsMap.get(key)
+      
+      // Check which stages this deal entered
+      stages.forEach(stage => {
+        const col = stageToCol[stage]
+        if (col && row[col] && row[col].trim() !== '') {
+          dealData.stagesEntered.add(stage)
+          if (stage === (pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live')) {
+            dealData.enteredLive = true
+          }
+        }
+      })
+    })
+    
+    const results = []
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i]
+      const dealsInStage = Array.from(dealsMap.values()).filter(d => d.stagesEntered.has(stage))
+      const dealsConverted = dealsInStage.filter(d => d.enteredLive).length
+      const nextStage = i < stages.length - 1 ? stages[i + 1] : null
+      const dealsToNextStage = nextStage
+        ? Array.from(dealsMap.values()).filter(d => 
+            d.stagesEntered.has(stage) && d.stagesEntered.has(nextStage)
+          ).length
+        : dealsConverted
+      
+      const stageConversion = dealsInStage.length > 0
+        ? Math.round((dealsToNextStage / dealsInStage.length) * 1000) / 10
+        : 0
+      
+      const overallConversion = dealsInStage.length > 0
+        ? Math.round((dealsConverted / dealsInStage.length) * 1000) / 10
+        : 0
+      
+      results.push({
+        stage,
+        dealsInStage: dealsInStage.length,
+        dealsToNextStage: nextStage ? dealsToNextStage : dealsConverted,
+        nextStage: nextStage || 'Live',
+        stageConversion,
+        overallConversion,
+      })
+    }
+    
+    return results
+  }, [data, pipeline])
+
+  const cohortConversion = useMemo(() => {
+    if (!data?.rawRows || !data?.monthLabels?.length || !data?.colToStageDS || !data?.colToStagePM) return []
+    
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    
+    // Find column name for live stage
+    let liveStageCol = null
+    for (const [col, stage] of Object.entries(colToStage)) {
+      if (stage === liveStageShort) {
+        liveStageCol = col
+        break
+      }
+    }
+    
+    if (!liveStageCol) return []
+    
+    const dealsMap = new Map()
+    
+    // Process rows to find entry month (earliest stage date) and conversion status
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      
+      const key = `${dealName}|${dealOwner}`
+      
+      // Find earliest stage entry date (entry month)
+      let earliestDate = null
+      let earliestMonth = null
+      let earliestDateStr = null
+      
+      for (const [col, stage] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && dateStr.trim() !== '') {
+          const date = parseDate(dateStr)
+          if (date && (!earliestDate || date < earliestDate)) {
+            earliestDate = date
+            earliestMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+            earliestDateStr = dateStr
+          }
+        }
+      }
+      
+      if (earliestMonth) {
+        if (!dealsMap.has(key)) {
+          dealsMap.set(key, {
+            dealName,
+            dealOwner,
+            entryMonth: earliestMonth,
+            entryDate: earliestDateStr,
+            converted: false,
+            liveDate: null,
+          })
+        } else {
+          // Use earliest entry month
+          const existing = dealsMap.get(key)
+          if (earliestMonth < existing.entryMonth) {
+            existing.entryMonth = earliestMonth
+            existing.entryDate = earliestDateStr
+          }
+        }
+      }
+      
+      // Check if converted (entered live stage)
+      const liveStageDate = row[liveStageCol]
+      if (liveStageDate && liveStageDate.trim() !== '') {
+        if (dealsMap.has(key)) {
+          dealsMap.get(key).converted = true
+          dealsMap.get(key).liveDate = liveStageDate
+        } else {
+          // Deal reached Live but has no other stage dates - use Live date as entry
+          const date = parseDate(liveStageDate)
+          if (date) {
+            const entryMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+            dealsMap.set(key, {
+              dealName,
+              dealOwner,
+              entryMonth,
+              entryDate: liveStageDate,
+              converted: true,
+              liveDate: liveStageDate,
+            })
+          }
+        }
+      }
+    })
+    
+    const cohortMap = new Map()
+    dealsMap.forEach(deal => {
+      if (!cohortMap.has(deal.entryMonth)) {
+        cohortMap.set(deal.entryMonth, {
+          month: deal.entryMonth,
+          totalDeals: 0,
+          convertedDeals: 0,
+          deals: [], // Store deal details for modal
+        })
+      }
+      const cohort = cohortMap.get(deal.entryMonth)
+      cohort.totalDeals++
+      cohort.deals.push({
+        dealName: deal.dealName,
+        dealOwner: deal.dealOwner,
+        entryDate: deal.entryDate,
+        liveDate: deal.liveDate,
+        converted: deal.converted,
+      })
+      if (deal.converted) cohort.convertedDeals++
+    })
+    
+    cohortMap.forEach(cohort => {
+      cohort.conversionRate = cohort.totalDeals > 0
+        ? Math.round((cohort.convertedDeals / cohort.totalDeals) * 1000) / 10
+        : 0
+      // Sort deals by name
+      cohort.deals.sort((a, b) => a.dealName.localeCompare(b.dealName))
+    })
+    
+    return Array.from(cohortMap.values()).sort((a, b) => a.month.localeCompare(b.month))
+  }, [data, pipeline])
+
+  const handleCohortRowClick = (cohort) => {
+    setCohortModal({
+      month: cohort.month,
+      deals: cohort.deals,
+    })
+  }
+
+  const monthlyConversionTrends = useMemo(() => {
+    if (!data?.rawRows || !data?.monthLabels?.length || !data?.colToStageDS || !data?.colToStagePM) return []
+    
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    
+    // Find column name for live stage
+    let liveStageCol = null
+    for (const [col, stage] of Object.entries(colToStage)) {
+      if (stage === liveStageShort) {
+        liveStageCol = col
+        break
+      }
+    }
+    
+    if (!liveStageCol) return []
+    
+    const dealsMap = new Map()
+    
+    // Process rows to find entry month (earliest stage) and conversion month
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      
+      const key = `${dealName}|${dealOwner}`
+      
+      // Find earliest stage entry date (entry month)
+      let earliestDate = null
+      let earliestMonth = null
+      
+      for (const [col] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && dateStr.trim() !== '') {
+          const date = parseDate(dateStr)
+          if (date && (!earliestDate || date < earliestDate)) {
+            earliestDate = date
+            earliestMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+          }
+        }
+      }
+      
+      if (earliestMonth) {
+        if (!dealsMap.has(key)) {
+          dealsMap.set(key, {
+            dealName,
+            dealOwner,
+            entryMonth: earliestMonth,
+            convertedMonth: null,
+          })
+        } else {
+          const existing = dealsMap.get(key)
+          if (earliestMonth < existing.entryMonth) {
+            existing.entryMonth = earliestMonth
+          }
+        }
+      }
+      
+      // Get conversion month
+      const liveStageDate = row[liveStageCol]
+      if (liveStageDate && liveStageDate.trim() !== '') {
+        const date = parseDate(liveStageDate)
+        if (date) {
+          const convertedMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+          if (dealsMap.has(key)) {
+            const deal = dealsMap.get(key)
+            if (!deal.convertedMonth || convertedMonth < deal.convertedMonth) {
+              deal.convertedMonth = convertedMonth
+            }
+          } else {
+            // Deal reached Live but has no other stage dates - use Live date as entry
+            dealsMap.set(key, {
+              dealName,
+              dealOwner,
+              entryMonth: convertedMonth,
+              convertedMonth,
+            })
+          }
+        }
+      }
+    })
+    
+    // Count unique deals that went live in each specific month
+    const dealsWentLiveByMonth = new Map()
+    const dealsWentLiveSet = new Map() // Track unique deals per month
+    
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      
+      const liveStageDate = row[liveStageCol]
+      if (liveStageDate && liveStageDate.trim() !== '') {
+        const date = parseDate(liveStageDate)
+        if (date) {
+          const convertedMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+          const key = `${dealName}|${dealOwner}`
+          
+          if (!dealsWentLiveSet.has(convertedMonth)) {
+            dealsWentLiveSet.set(convertedMonth, new Set())
+          }
+          
+          // Only count each deal once per month
+          if (!dealsWentLiveSet.get(convertedMonth).has(key)) {
+            dealsWentLiveSet.get(convertedMonth).add(key)
+            dealsWentLiveByMonth.set(convertedMonth, (dealsWentLiveByMonth.get(convertedMonth) || 0) + 1)
+          }
+        }
+      }
+    })
+    
+    return data.monthLabels.map(month => {
+      const dealsEntered = Array.from(dealsMap.values()).filter(d => d.entryMonth && d.entryMonth <= month).length
+      const dealsConverted = Array.from(dealsMap.values()).filter(
+        d => d.entryMonth && d.entryMonth <= month && d.convertedMonth && d.convertedMonth <= month
+      ).length
+      const conversionRate = dealsEntered > 0
+        ? Math.round((dealsConverted / dealsEntered) * 1000) / 10
+        : 0
+      const dealsWentLive = dealsWentLiveByMonth.get(month) || 0
+      return { month, dealsEntered, dealsConverted, conversionRate, dealsWentLive }
+    })
+  }, [data, pipeline])
 
   if (loading) return <div className="loading">Loading data from Google Sheets…</div>
   if (error) {
@@ -736,6 +1183,215 @@ function App() {
           )}
         </div>
       </main>
+
+      {/* Funnel Conversion Metrics Section */}
+      {overallConversion && (
+        <div className="conversion-section">
+          <div className="card">
+            <h2 className="card-title">Funnel Conversion Metrics</h2>
+            <p className="card-desc">
+              Conversion analysis showing how deals progress through the funnel. A deal is considered converted when it reaches the "Live" stage.
+            </p>
+            
+            {/* Overall Conversion */}
+            <div className="conversion-overall">
+              <h3 className="conversion-subtitle">Overall Conversion Rate</h3>
+              <div className="conversion-stats">
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallConversion.conversionRate}%</div>
+                  <div className="conversion-stat-label">Conversion Rate</div>
+                </div>
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallConversion.convertedDeals}</div>
+                  <div className="conversion-stat-label">Deals Converted</div>
+                </div>
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallConversion.totalDeals}</div>
+                  <div className="conversion-stat-label">Total Deals</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Stage-by-Stage Conversion */}
+            {stageConversion.length > 0 && (
+              <div className="conversion-stages">
+                <h3 className="conversion-subtitle">Stage-by-Stage Conversion</h3>
+                <div className="conversion-table-wrapper">
+                  <table className="conversion-table">
+                    <thead>
+                      <tr>
+                        <th>Stage</th>
+                        <th>Deals in Stage</th>
+                        <th>Moved to Next</th>
+                        <th>Stage Conversion</th>
+                        <th>Overall Conversion</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stageConversion.map((s, i) => (
+                        <tr key={i}>
+                          <td className="stage-name">{s.stage}</td>
+                          <td>{s.dealsInStage}</td>
+                          <td>{s.dealsToNextStage}</td>
+                          <td>
+                            <span className={`conversion-badge ${s.stageConversion >= 50 ? 'high' : s.stageConversion >= 25 ? 'medium' : 'low'}`}>
+                              {s.stageConversion}%
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`conversion-badge ${s.overallConversion >= 50 ? 'high' : s.overallConversion >= 25 ? 'medium' : 'low'}`}>
+                              {s.overallConversion}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Monthly Conversion Trends */}
+            {monthlyConversionTrends.length > 0 && (
+              <div className="conversion-trends">
+                <h3 className="conversion-subtitle">Monthly Conversion Trends</h3>
+                <div className="chart-inner" style={{ minHeight: 300 }}>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <ComposedChart data={monthlyConversionTrends}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#edf2f7" />
+                      <XAxis
+                        dataKey="month"
+                        tickFormatter={(v) => formatMonthLabel(v)}
+                        tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                      />
+                      <YAxis
+                        yAxisId="left"
+                        tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                        label={{ value: 'Conversion Rate (%)', angle: -90, position: 'insideLeft' }}
+                      />
+                      <YAxis
+                        yAxisId="right"
+                        orientation="right"
+                        tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                        label={{ value: 'Deals Went Live', angle: 90, position: 'insideRight' }}
+                      />
+                      <Tooltip
+                        formatter={(value, name) => {
+                          if (name === 'Conversion Rate') return [`${value}%`, name]
+                          if (name === 'Deals Went Live') return [value, name]
+                          return [value, name]
+                        }}
+                        labelFormatter={(label) => `Month: ${formatMonthLabel(label)}`}
+                      />
+                      <Legend />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="conversionRate"
+                        stroke="#3b82f6"
+                        strokeWidth={2}
+                        dot={{ fill: '#3b82f6', r: 4 }}
+                        name="Conversion Rate"
+                      />
+                      <Bar
+                        yAxisId="right"
+                        dataKey="dealsWentLive"
+                        fill="#22c55e"
+                        name="Deals Went Live"
+                        radius={[4, 4, 0, 0]}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {/* Cohort Conversion */}
+            {cohortConversion.length > 0 && (
+              <div className="conversion-cohorts">
+                <h3 className="conversion-subtitle">Cohort Conversion Analysis</h3>
+                <div className="conversion-table-wrapper">
+                  <table className="conversion-table">
+                    <thead>
+                      <tr>
+                        <th>Entry Month</th>
+                        <th>Total Deals</th>
+                        <th>Converted</th>
+                        <th>Conversion Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cohortConversion.map((c, i) => (
+                        <tr key={i} className="cohort-row" onClick={() => handleCohortRowClick(c)} style={{ cursor: 'pointer' }}>
+                          <td>{formatMonthLabel(c.month)}</td>
+                          <td>{c.totalDeals}</td>
+                          <td>{c.convertedDeals}</td>
+                          <td>
+                            <span className={`conversion-badge ${c.conversionRate >= 50 ? 'high' : c.conversionRate >= 25 ? 'medium' : 'low'}`}>
+                              {c.conversionRate}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Cohort Details Modal */}
+      {cohortModal && (
+        <div className="modal-overlay" onClick={() => setCohortModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Cohort Details – {formatMonthLabel(cohortModal.month)}</h3>
+              <button className="modal-close" onClick={() => setCohortModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="cohort-summary">
+                {cohortModal.deals.length} deal{cohortModal.deals.length !== 1 ? 's' : ''} entered the pipeline in {formatMonthLabel(cohortModal.month)}.
+                {cohortModal.deals.filter(d => d.converted).length > 0 && (
+                  <span> {cohortModal.deals.filter(d => d.converted).length} of them reached Live.</span>
+                )}
+              </p>
+              <table className="deal-table">
+                <thead>
+                  <tr>
+                    <th>Deal Name</th>
+                    <th>Deal Owner</th>
+                    <th>Entry Date</th>
+                    <th>Went Live</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cohortModal.deals.map((d, i) => (
+                    <tr key={i}>
+                      <td>{d.dealName}</td>
+                      <td>{d.dealOwner}</td>
+                      <td>{d.entryDate ? formatDate(d.entryDate) : '-'}</td>
+                      <td>{d.liveDate ? formatDate(d.liveDate) : '-'}</td>
+                      <td>
+                        {d.converted ? (
+                          <span className="status-badge converted">Converted</span>
+                        ) : (
+                          <span className="status-badge not-converted">Not Converted</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(null)}>

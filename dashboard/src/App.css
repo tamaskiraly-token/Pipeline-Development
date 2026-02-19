@@ -643,3 +643,177 @@ body {
   font-style: italic;
   margin-right: 8px;
 }
+
+/* Conversion Metrics Section */
+.conversion-section {
+  margin-top: 32px;
+}
+
+.conversion-overall {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.conversion-subtitle {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a202c;
+}
+
+.conversion-stats {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.conversion-stat {
+  flex: 1;
+  min-width: 150px;
+  padding: 20px;
+  background: #f7fafc;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.conversion-stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1a202c;
+  margin-bottom: 8px;
+}
+
+.conversion-stat-label {
+  font-size: 13px;
+  color: #718096;
+  font-weight: 500;
+}
+
+.conversion-stages,
+.conversion-trends,
+.conversion-cohorts {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.conversion-table-wrapper {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+
+.conversion-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.conversion-table th,
+.conversion-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.conversion-table th {
+  font-weight: 600;
+  color: #4a5568;
+  background: #f7fafc;
+  position: sticky;
+  top: 0;
+}
+
+.conversion-table td {
+  color: #1a202c;
+}
+
+.conversion-table tr:hover td {
+  background: #f7fafc;
+}
+
+.cohort-row:hover {
+  background: #f0f9ff !important;
+}
+
+.cohort-summary {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: #4a5568;
+  padding: 12px;
+  background: #f7fafc;
+  border-radius: 8px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-badge.converted {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-badge.not-converted {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.stage-name {
+  font-weight: 500;
+  color: #1a202c;
+}
+
+.conversion-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.conversion-badge.high {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.conversion-badge.medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.conversion-badge.low {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 768px) {
+  .conversion-stats {
+    flex-direction: column;
+  }
+  
+  .conversion-stat {
+    min-width: unset;
+  }
+  
+  .conversion-stat-value {
+    font-size: 28px;
+  }
+  
+  .conversion-table-wrapper {
+    overflow-x: scroll;
+  }
+  
+  .conversion-table {
+    font-size: 12px;
+  }
+  
+  .conversion-table th,
+  .conversion-table td {
+    padding: 8px 12px;
+  }
+}
