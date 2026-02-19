@@ -10,30 +10,31 @@ import {
   ResponsiveContainer,
   LabelList,
 } from 'recharts'
+import { fetchDataFromGoogleSheets } from './utils/googleSheets'
 import './App.css'
 
-// Token.io website palette – blues, teals, amber (#edb312), coral (#f58c78), indigo (#5a67d8)
+// Company color palette – distinct colors for each stage
 const COLORS = {
   'Direct Sales': {
-    '1 - Target': '#edb312',
-    '2 - Qualified': '#f59e0b',
-    '3 - Proposal': '#5a67d8',
-    '4 - Shortlist': '#6366f1',
-    '5 - Negotiate': '#0d9488',
-    '6 - Contract Out': '#06b6d4',
-    '7 - Deal Approval': '#3b82f6',
-    '8 - Closed Won': '#2563eb',
-    '9 - Implementation': '#10b981',
-    '10 - Live': '#f58c78',
+    '1 - Target': '#2f1e4f',        // Dark purple/indigo
+    '2 - Qualified': '#ef4444',     // Red
+    '3 - Proposal': '#f59e0b',      // Orange/Amber
+    '4 - Shortlist': '#3b82f6',     // Bright blue
+    '5 - Negotiate': '#10b981',     // Green
+    '6 - Contract Out': '#06b6d4',  // Teal/Cyan
+    '7 - Deal Approval': '#8b5cf6', // Purple
+    '8 - Closed Won': '#22c55e',     // Bright green
+    '9 - Implementation': '#14b8a6', // Turquoise
+    '10 - Live': '#93c5fd',         // Light blue
   },
   'Partner Management': {
-    '0 - Dormant': '#edb312',
-    'i - Identified or Unknown': '#f59e0b',
-    'ii - Qualified/Proposal': '#5a67d8',
-    'iii - Negotiation': '#0d9488',
-    'iv - Closed Won': '#2563eb',
-    'v - Implementation': '#10b981',
-    'vi - Live': '#f58c78',
+    '0 - Dormant': '#2f1e4f',       // Dark purple/indigo
+    'i - Identified or Unknown': '#ffb3ba', // Light pastel red
+    'ii - Qualified/Proposal': '#f59e0b',  // Orange/Amber
+    'iii - Negotiation': '#3b82f6', // Bright blue
+    'iv - Closed Won': '#22c55e',   // Bright green
+    'v - Implementation': '#14b8a6', // Turquoise
+    'vi - Live': '#93c5fd',         // Light blue
   },
 }
 
@@ -73,10 +74,16 @@ function computeChartFromDealDetails(dealDetails, monthLabels, stages, selectedO
     if (dealNameSet && !dealNameSet.has(d.dealName)) return false
     return true
   }
-  const agg = (deals) =>
-    metric === 'amount'
-      ? deals.filter(matchDeal).reduce((sum, d) => sum + (Number(d.amount) || 0), 0)
-      : deals.filter(matchDeal).length
+  const agg = (deals) => {
+    const filtered = deals.filter(matchDeal)
+    if (metric === 'amount') {
+      return filtered.reduce((sum, d) => sum + (Number(d.amount) || 0), 0)
+    } else if (metric === 'monthlyTransactions') {
+      return filtered.reduce((sum, d) => sum + (Number(d.monthlyTransactions) || 0), 0)
+    } else {
+      return filtered.length
+    }
+  }
   return monthLabels.map((month) => {
     const point = { month }
     let total = 0
@@ -117,6 +124,20 @@ function formatAmountShort(val) {
   return formatAmount(val)
 }
 
+function formatNumber(val) {
+  if (val == null) return '-'
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(val)
+}
+
+function formatNumberShort(val) {
+  if (val == null || val === 0) return '0'
+  const abs = Math.abs(val)
+  if (abs >= 1e9) return `${(val / 1e9).toFixed(1)}B`
+  if (abs >= 1e6) return `${(val / 1e6).toFixed(1)}M`
+  if (abs >= 1e3) return `${(val / 1e3).toFixed(0)}K`
+  return formatNumber(val)
+}
+
 function App() {
   const [pipeline, setPipeline] = useState('Partner Management')
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -129,7 +150,7 @@ function App() {
   const [selectedDealNames, setSelectedDealNames] = useState([])
   const [dealNameSearch, setDealNameSearch] = useState('')
   const [filterOpen, setFilterOpen] = useState(null)
-  const [dataType, setDataType] = useState('count') // 'count' | 'amount'
+  const [dataType, setDataType] = useState('count') // 'count' | 'amount' | 'monthlyTransactions'
 
   useEffect(() => {
     setIncludedStages([])
@@ -146,18 +167,20 @@ function App() {
   }, [filterOpen])
 
   useEffect(() => {
-    fetch('/pipeline-data.json?t=' + Date.now(), { cache: 'no-store' })
-      .then((r) => {
-        if (!r.ok) throw new Error('Failed to load data')
-        return r.json()
-      })
+    const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1FhenanldXBkesfIrWUXksMyjJgoYK-_em4DLUcMcSGE'
+    const gid = import.meta.env.VITE_GOOGLE_SHEET_GID || '0'
+    
+    fetchDataFromGoogleSheets(sheetId, gid)
       .then((json) => {
         setData(json)
         if (json.monthLabels?.length && !selectedMonth) {
           setSelectedMonth(json.monthLabels[json.monthLabels.length - 1])
         }
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        console.error('Error loading data:', err)
+        setError(err.message || 'Failed to load data from Google Sheets')
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -190,7 +213,7 @@ function App() {
 
   const allRechartsData = useMemo(() => {
     const needsDealDetails =
-      dataType === 'amount' || selectedOwners.length > 0 || selectedDealNames.length > 0
+      dataType === 'amount' || dataType === 'monthlyTransactions' || selectedOwners.length > 0 || selectedDealNames.length > 0
     if (needsDealDetails && dealDetails) {
       return computeChartFromDealDetails(
         dealDetails,
@@ -202,7 +225,7 @@ function App() {
         dataType
       )
     }
-    if (dataType === 'amount') return [] // amount mode needs dealDetails
+    if (dataType === 'amount' || dataType === 'monthlyTransactions') return [] // these modes need dealDetails
     return toRechartsFormat(chartData ?? [], data?.monthLabels ?? [], includedStages)
   }, [chartData, data?.monthLabels, dealDetails, selectedOwners, selectedDealNames, includedStages, stages, dataType])
 
@@ -214,6 +237,15 @@ function App() {
     const start = Math.max(0, idx - showMonths + 1)
     return allRechartsData.slice(start, idx + 1)
   }, [allRechartsData, selectedMonth, data?.monthLabels])
+
+  // Calculate interval for x-axis labels based on number of months
+  const xAxisInterval = useMemo(() => {
+    const monthCount = rechartsData?.length || 0
+    if (monthCount <= 6) return 0 // Show all labels
+    if (monthCount <= 12) return 0 // Show all labels
+    if (monthCount <= 18) return 1 // Show every other label
+    return 2 // Show every third label
+  }, [rechartsData])
 
   const visibleStages = useMemo(
     () => (includedStages.length === 0 ? stages : stages.filter((s) => includedStages.includes(s))),
@@ -353,14 +385,15 @@ function App() {
     return formatMonthLabel(m)
   }, [data?.monthLabels, selectedMonth])
 
-  if (loading) return <div className="loading">Loading data…</div>
+  if (loading) return <div className="loading">Loading data from Google Sheets…</div>
   if (error) {
     return (
       <div className="error">
         <p>{error}</p>
         <p className="hint">
-          Run <code>python pipeline_dashboard.py</code> from the project root first
-          to generate the pipeline-data.json file.
+          Make sure the Google Sheets document is publicly accessible and the Sheet ID is correct.
+          <br />
+          Check the browser console for more details.
         </p>
       </div>
     )
@@ -414,6 +447,12 @@ function App() {
                 onClick={() => setDataType('amount')}
               >
                 Amount
+              </button>
+              <button
+                className={`tab ${dataType === 'monthlyTransactions' ? 'tab-active' : ''}`}
+                onClick={() => setDataType('monthlyTransactions')}
+              >
+                Monthly transactions
               </button>
             </div>
           </div>
@@ -542,36 +581,45 @@ function App() {
           <p className="card-desc">
             {dataType === 'count'
               ? 'Stacked column chart showing the number of active deals by stage at each month-end.'
-              : 'Stacked column chart showing the total deal amount (USD) by stage at each month-end.'}{' '}
+              : dataType === 'amount'
+              ? 'Stacked column chart showing the total deal amount (USD) by stage at each month-end.'
+              : 'Stacked column chart showing the total monthly transactions (txns p.m.) by stage at each month-end.'}{' '}
             Bridge sequencing follows deal flow from early stages to Closed Won / Implementation / Live.
           </p>
-          <div className="chart-inner" style={{ minHeight: 520 }}>
+          <div className="chart-inner" style={{ minHeight: 750 }}>
             {!rechartsData?.length ? (
               <div className="loading">No data to display.</div>
             ) : (
-            <ResponsiveContainer width="100%" height={520}>
+            <ResponsiveContainer width="100%" height={750}>
               <BarChart
                 data={rechartsData}
-                margin={{ top: 36, right: 30, left: 20, bottom: 120 }}
+                margin={{ top: 36, right: 30, left: 20, bottom: 160 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#edf2f7" vertical={false} />
                 <XAxis
                   dataKey="month"
                   tickFormatter={(v) => formatMonthLabel(v)}
-                  tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                  tick={{ fontSize: 10, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
                   axisLine={{ stroke: '#e0e4e8' }}
                   tickLine={false}
                   angle={-45}
                   textAnchor="end"
-                  height={100}
-                  interval={0}
+                  height={140}
+                  interval={xAxisInterval}
+                  minTickGap={10}
+                  dx={-8}
+                  dy={15}
                 />
                 <YAxis
                   tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
                   axisLine={false}
                   tickLine={false}
-                  allowDecimals={dataType === 'amount'}
-                  tickFormatter={(v) => (dataType === 'amount' ? formatAmountShort(v) : v)}
+                  allowDecimals={dataType === 'amount' || dataType === 'monthlyTransactions'}
+                  tickFormatter={(v) => {
+                    if (dataType === 'amount') return formatAmountShort(v)
+                    if (dataType === 'monthlyTransactions') return formatNumberShort(v)
+                    return v
+                  }}
                 />
                 <Tooltip
                   contentStyle={{
@@ -581,10 +629,11 @@ function App() {
                     boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
                     fontFamily: "'DM Sans', sans-serif",
                   }}
-                  formatter={(value, name) => [
-                    dataType === 'amount' ? formatAmount(value) : value,
-                    name,
-                  ]}
+                  formatter={(value, name) => {
+                    if (dataType === 'amount') return [formatAmount(value), name]
+                    if (dataType === 'monthlyTransactions') return [formatNumber(value), name]
+                    return [value, name]
+                  }}
                   labelFormatter={(label) => `Month: ${formatMonthLabel(label)}`}
                 />
                 <Legend
@@ -610,9 +659,12 @@ function App() {
                     <LabelList
                       dataKey={stage}
                       position="center"
-                      formatter={(val) =>
-                        val > 0 ? (dataType === 'amount' ? formatAmountShort(val) : val) : ''
-                      }
+                      formatter={(val) => {
+                        if (val <= 0) return ''
+                        if (dataType === 'amount') return formatAmountShort(val)
+                        if (dataType === 'monthlyTransactions') return formatNumberShort(val)
+                        return val
+                      }}
                       style={{ fill: '#1a202c', fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif" }}
                     />
                     <LabelList
@@ -620,9 +672,12 @@ function App() {
                         entry?._topStage === stage && entry?.total != null ? entry.total : null
                       }
                       position="top"
-                      formatter={(val) =>
-                        val != null ? (dataType === 'amount' ? formatAmountShort(val) : String(val)) : ''
-                      }
+                      formatter={(val) => {
+                        if (val == null) return ''
+                        if (dataType === 'amount') return formatAmountShort(val)
+                        if (dataType === 'monthlyTransactions') return formatNumberShort(val)
+                        return String(val)
+                      }}
                       style={{ fill: '#1a202c', fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif" }}
                     />
                   </Bar>
@@ -684,6 +739,7 @@ function App() {
                     <th>Deal Owner</th>
                     <th>Date Entered Stage</th>
                     <th>Amount</th>
+                    <th>Monthly Transactions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -694,6 +750,7 @@ function App() {
                       <td>{d.dealOwner}</td>
                       <td>{d.dateEnteredStage || '-'}</td>
                       <td>{formatAmount(d.amount)}</td>
+                      <td>{formatNumber(d.monthlyTransactions || 0)}</td>
                     </tr>
                   ))}
                 </tbody>
