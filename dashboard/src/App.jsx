@@ -151,6 +151,16 @@ function App() {
   const [dealNameSearch, setDealNameSearch] = useState('')
   const [filterOpen, setFilterOpen] = useState(null)
   const [dataType, setDataType] = useState('count') // 'count' | 'amount' | 'monthlyTransactions'
+  const [chartHeight, setChartHeight] = useState(750)
+  
+  useEffect(() => {
+    const updateChartHeight = () => {
+      setChartHeight(window.innerWidth <= 768 ? 500 : 750)
+    }
+    updateChartHeight()
+    window.addEventListener('resize', updateChartHeight)
+    return () => window.removeEventListener('resize', updateChartHeight)
+  }, [])
 
   useEffect(() => {
     setIncludedStages([])
@@ -402,60 +412,24 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <div className="header-left">
-          <img
-            src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTJ4lz2AIGPYV-lEuY8XU-ezlAqO5IqACf5sQ&s"
-            alt="Token"
-            className="logo-img"
-            onError={(e) => {
-              e.target.onerror = null
-              e.target.src = '/token-logo.svg'
-            }}
-          />
-          <div className="title-block">
-            <h1>Pipeline Development</h1>
-            <p className="header-subtitle">Deal stage breakdown by month – active opportunities across Direct Sales and Partner Management.</p>
-          </div>
-        </div>
-        <div className="header-right">
-          <div className="filter-group">
-            <label htmlFor="month-select">Month:</label>
-            <select
-              id="month-select"
-              className="month-select"
-              value={selectedMonth ?? 'all'}
-              onChange={(e) => setSelectedMonth(e.target.value === 'all' ? 'all' : e.target.value)}
-            >
-              {monthOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="data-switcher">
-            <span className="data-switcher-label">Show:</span>
-            <div className="pipeline-tabs data-switcher-tabs">
-              <button
-                className={`tab ${dataType === 'count' ? 'tab-active' : ''}`}
-                onClick={() => setDataType('count')}
-              >
-                # Deals
-              </button>
-              <button
-                className={`tab ${dataType === 'amount' ? 'tab-active' : ''}`}
-                onClick={() => setDataType('amount')}
-              >
-                Amount
-              </button>
-              <button
-                className={`tab ${dataType === 'monthlyTransactions' ? 'tab-active' : ''}`}
-                onClick={() => setDataType('monthlyTransactions')}
-              >
-                Monthly transactions
-              </button>
+        <div className="header-top">
+          <div className="header-left">
+            <img
+              src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTJ4lz2AIGPYV-lEuY8XU-ezlAqO5IqACf5sQ&s"
+              alt="Token"
+              className="logo-img"
+              onError={(e) => {
+                e.target.onerror = null
+                e.target.src = '/token-logo.svg'
+              }}
+            />
+            <div className="title-block">
+              <h1>Pipeline Development</h1>
+              <p className="header-subtitle">Deal stage breakdown by month – active opportunities across Direct Sales and Partner Management.</p>
             </div>
           </div>
+        </div>
+        <div className="header-controls">
           <div className="pipeline-tabs">
             <button
               className={`tab ${pipeline === 'Partner Management' ? 'tab-active' : ''}`}
@@ -469,6 +443,46 @@ function App() {
             >
               Direct Sales
             </button>
+          </div>
+          <div className="control-group">
+            <div className="filter-group">
+              <label htmlFor="month-select">Month:</label>
+              <select
+                id="month-select"
+                className="month-select"
+                value={selectedMonth ?? 'all'}
+                onChange={(e) => setSelectedMonth(e.target.value === 'all' ? 'all' : e.target.value)}
+              >
+                {monthOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="data-switcher">
+              <span className="data-switcher-label">Show:</span>
+              <div className="pipeline-tabs data-switcher-tabs">
+                <button
+                  className={`tab ${dataType === 'count' ? 'tab-active' : ''}`}
+                  onClick={() => setDataType('count')}
+                >
+                  # Deals
+                </button>
+                <button
+                  className={`tab ${dataType === 'amount' ? 'tab-active' : ''}`}
+                  onClick={() => setDataType('amount')}
+                >
+                  Amount
+                </button>
+                <button
+                  className={`tab ${dataType === 'monthlyTransactions' ? 'tab-active' : ''}`}
+                  onClick={() => setDataType('monthlyTransactions')}
+                >
+                  Monthly transactions
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </header>
@@ -586,11 +600,11 @@ function App() {
               : 'Stacked column chart showing the total monthly transactions (txns p.m.) by stage at each month-end.'}{' '}
             Bridge sequencing follows deal flow from early stages to Closed Won / Implementation / Live.
           </p>
-          <div className="chart-inner" style={{ minHeight: 750 }}>
+          <div className="chart-inner" style={{ minHeight: window.innerWidth <= 768 ? 500 : 750 }}>
             {!rechartsData?.length ? (
               <div className="loading">No data to display.</div>
             ) : (
-            <ResponsiveContainer width="100%" height={750}>
+            <ResponsiveContainer width="100%" height={chartHeight}>
               <BarChart
                 data={rechartsData}
                 margin={{ top: 36, right: 30, left: 20, bottom: 160 }}

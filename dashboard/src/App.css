@@ -11,23 +11,34 @@ body {
 
 .app {
   min-height: 100vh;
-  padding: 28px 36px;
+  padding: 20px 24px;
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px;
+  }
 }
 
 /* Header – Revenue Decomposition style */
 .header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 24px;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
+}
+
+.header-top {
+  margin-bottom: 20px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .header-left {
+    gap: 12px;
+  }
 }
 
 .logo-img {
@@ -50,6 +61,16 @@ body {
   letter-spacing: -0.02em;
 }
 
+@media (max-width: 768px) {
+  .title-block h1 {
+    font-size: 18px;
+  }
+  
+  .logo-img {
+    height: 28px;
+  }
+}
+
 .header-subtitle {
   margin: 0;
   font-size: 14px;
@@ -57,17 +78,66 @@ body {
   color: #718096;
 }
 
-.header-right {
+@media (max-width: 768px) {
+  .header-subtitle {
+    font-size: 12px;
+  }
+}
+
+.header-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+@media (min-width: 769px) {
+  .header-controls {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+}
+
+.control-group {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
   flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .control-group {
+    flex-direction: column;
+    width: 100%;
+    gap: 12px;
+  }
+  
+  .control-group > * {
+    width: 100%;
+  }
 }
 
 .filter-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .filter-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  
+  .filter-group label {
+    font-size: 12px;
+  }
 }
 
 .filter-group label {
@@ -79,7 +149,30 @@ body {
 .data-switcher {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .data-switcher {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+  }
+  
+  .data-switcher-label {
+    font-size: 12px;
+  }
+  
+  .data-switcher-tabs {
+    width: 100%;
+  }
+  
+  .data-switcher-tabs .tab {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
 }
 
 .data-switcher-label {
@@ -106,6 +199,13 @@ body {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
+@media (max-width: 768px) {
+  .month-select {
+    width: 100%;
+    min-width: unset;
+  }
+}
+
 .month-select:focus {
   outline: none;
   border-color: #a0aec0;
@@ -124,6 +224,18 @@ body {
   border-radius: 12px;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+@media (max-width: 768px) {
+  .pipeline-tabs {
+    width: 100%;
+  }
+  
+  .pipeline-tabs .tab {
+    flex: 1;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
 }
 
 .tab {
@@ -274,6 +386,25 @@ body {
 /* Main content */
 .main {
   max-width: 1400px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .main {
+    width: 100%;
+  }
+  
+  .card {
+    padding: 20px 16px;
+  }
+  
+  .card-title {
+    font-size: 16px;
+  }
+  
+  .card-desc {
+    font-size: 13px;
+  }
 }
 
 .card {
