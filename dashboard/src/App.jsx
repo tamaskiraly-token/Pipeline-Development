@@ -1145,7 +1145,7 @@ function App() {
 
   return (
     <div className="app">
-      <header className="header">
+      <header className="header app-content-width">
         <div className="header-top">
           <div className="header-left">
             <img
@@ -1221,7 +1221,7 @@ function App() {
         </div>
       </header>
 
-      <div className="filters-row">
+      <div className="filters-row app-content-width">
         <div className="filter-dropdown">
           <button className="filter-dropdown-btn" type="button" onClick={(e) => { e.stopPropagation(); setFilterOpen((f) => (f === 'stage' ? null : 'stage')); }}>
             Deal Stage {includedStages.length === 0 ? '(All)' : `(${includedStages.length} selected)`} ▾
@@ -1411,7 +1411,7 @@ function App() {
         </div>
       </div>
 
-      <main className="main">
+      <main className="main app-content-width">
         <div className="card chart-card">
           <h2 className="card-title">Deal Stage Breakdown</h2>
           <p className="card-desc">
@@ -1561,7 +1561,7 @@ function App() {
 
       {/* Funnel Conversion Metrics Section */}
       {overallConversion && (
-        <div className="conversion-section">
+        <div className="conversion-section app-content-width">
           <div className="card">
             <h2 className="card-title">Funnel Conversion Metrics</h2>
             <p className="card-desc">
@@ -1722,7 +1722,7 @@ function App() {
 
       {/* Sales Cycle Analysis Section */}
       {overallSalesCycle && (
-        <div className="conversion-section">
+        <div className="conversion-section app-content-width">
           <div className="card">
             <h2 className="card-title">Sales Cycle Analysis</h2>
             <p className="card-desc">

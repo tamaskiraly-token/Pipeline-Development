@@ -20,6 +20,13 @@ body {
   }
 }
 
+/* Content width – consistent across all sections */
+.app-content-width {
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* Header – Revenue Decomposition style */
 .header {
   margin-bottom: 24px;
@@ -504,11 +511,7 @@ body {
   cursor: pointer;
 }
 
-/* Main content */
-.main {
-  max-width: 1400px;
-  margin: 0 auto;
-}
+/* Main content – width via .app-content-width */
 
 @media (max-width: 768px) {
   .main {
