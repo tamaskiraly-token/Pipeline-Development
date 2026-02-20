@@ -133,6 +133,138 @@ function formatMonthLabel(ym) {
   return `${months[parseInt(m, 10) - 1] || m} ${y}`
 }
 
+function getInsightDealStageBreakdown(rechartsData, dataType, formatMonthLabel) {
+  if (!rechartsData?.length) return null
+  const last3 = rechartsData.slice(-3)
+  const stageTotals = {}
+  last3.forEach((p) => {
+    Object.keys(p).forEach((k) => {
+      if (k !== 'month' && k !== 'total' && !k.startsWith('_')) {
+        stageTotals[k] = (stageTotals[k] || 0) + (p[k] || 0)
+      }
+    })
+  })
+  const topStage = Object.entries(stageTotals).sort((a, b) => b[1] - a[1])[0]
+  let momChange = ''
+  if (rechartsData.length >= 2) {
+    const prev = rechartsData[rechartsData.length - 2]?.total || 0
+    const curr = rechartsData[rechartsData.length - 1]?.total || 0
+    const pct = prev ? Math.round(((curr - prev) / prev) * 100) : 0
+    momChange = ` Month-over-month: ${formatMonthLabel(rechartsData[rechartsData.length - 1]?.month)} shows ${pct >= 0 ? '+' : ''}${pct}% vs previous month.`
+  }
+  return {
+    title: 'Deal Stage Breakdown',
+    content: `Stage with the highest volume in the last 3 months: ${topStage?.[0] ?? 'N/A'} (${topStage?.[1] ?? 0}).${momChange}`,
+  }
+}
+
+function getInsightPipelineMovements(movements, monthLabel) {
+  if (!movements?.length) return null
+  const byTo = {}
+  movements.forEach((m) => {
+    const k = m.fromStage ? `${m.fromStage} → ${m.toStage}` : `New → ${m.toStage}`
+    byTo[k] = (byTo[k] || 0) + 1
+  })
+  const top = Object.entries(byTo).sort((a, b) => b[1] - a[1])[0]
+  return {
+    title: `Pipeline Movements – ${monthLabel}`,
+    content: `${movements.length} stage changes in this month. Most common: ${top?.[0]} (${top?.[1]} deals).`,
+  }
+}
+
+function getInsightOverallConversion(overallConversion) {
+  if (!overallConversion) return null
+  const { conversionRate, convertedDeals, totalDeals } = overallConversion
+  let bench = ''
+  if (conversionRate < 15) bench = ' Below typical B2B benchmarks (15–30%). Consider reviewing early-stage qualification.'
+  else if (conversionRate > 25) bench = ' Above average—strong pipeline quality or qualification.'
+  return {
+    title: 'Overall Conversion Rate',
+    content: `${conversionRate}% of ${totalDeals} deals reached Live (${convertedDeals} converted).${bench}`,
+  }
+}
+
+function getInsightStageConversion(stageConversion) {
+  if (!stageConversion?.length) return null
+  const best = stageConversion.reduce((a, b) => (b.stageConversion > (a?.stageConversion ?? 0) ? b : a), null)
+  const worst = stageConversion.reduce((a, b) => (a && b.stageConversion < a.stageConversion ? b : a), stageConversion[0])
+  return {
+    title: 'Stage-by-Stage Conversion',
+    content: `Best conversion: ${best?.stage} (${best?.stageConversion}%). Bottleneck: ${worst?.stage} (${worst?.stageConversion}%)—largest drop-off.`,
+  }
+}
+
+function getInsightMonthlyConversionTrends(trends, formatMonthLabel) {
+  if (!trends?.length) return null
+  const best = trends.reduce((a, b) => (b.conversionRate > (a?.conversionRate ?? 0) ? b : a), null)
+  const mostLive = trends.reduce((a, b) => (b.dealsWentLive > (a?.dealsWentLive ?? 0) ? b : a), null)
+  return {
+    title: 'Monthly Conversion Trends',
+    content: `Highest conversion: ${formatMonthLabel(best?.month)} (${best?.conversionRate}%). Most deals went Live in ${formatMonthLabel(mostLive?.month)} (${mostLive?.dealsWentLive} deals).`,
+  }
+}
+
+function getInsightCohortConversion(cohortConversion, formatMonthLabel) {
+  if (!cohortConversion?.length) return null
+  const best = cohortConversion.reduce((a, b) => (b.conversionRate > (a?.conversionRate ?? 0) ? b : a), null)
+  const worst = cohortConversion.reduce((a, b) => (a && b.conversionRate < a.conversionRate ? b : a), cohortConversion[0])
+  return {
+    title: 'Cohort Conversion Analysis',
+    content: `Best cohort: ${formatMonthLabel(best?.month)} (${best?.conversionRate}%, ${best?.convertedDeals}/${best?.totalDeals}). Weakest: ${formatMonthLabel(worst?.month)} (${worst?.conversionRate}%).`,
+  }
+}
+
+function getInsightOverallSalesCycle(overallSalesCycle) {
+  if (!overallSalesCycle) return null
+  const { avgDays, medianDays, count, minDays, maxDays } = overallSalesCycle
+  let bench = ''
+  if (avgDays > 90) bench = ' Longer than typical B2B cycles (30–90 days).'
+  else if (avgDays < 60) bench = ' Shorter than average—efficient process.'
+  const skew = medianDays < avgDays * 0.8 ? ' Median well below average—some deals take much longer.' : ''
+  return {
+    title: 'Overall Sales Cycle',
+    content: `Avg ${avgDays} days, median ${medianDays} days (${count} deals). Range: ${minDays}–${maxDays} days.${bench}${skew}`,
+  }
+}
+
+function getInsightSalesCycleByMonth(cohorts, formatMonthLabel) {
+  if (!cohorts?.length) return null
+  const fastest = cohorts.reduce((a, b) => (a && b.avgDays < a.avgDays ? b : a), cohorts[0])
+  const slowest = cohorts.reduce((a, b) => (b.avgDays > (a?.avgDays ?? 0) ? b : a), null)
+  return {
+    title: 'Avg days to Live by entry month',
+    content: `Fastest cohort: ${formatMonthLabel(fastest?.month)} (${fastest?.avgDays} days). Slowest: ${formatMonthLabel(slowest?.month)} (${slowest?.avgDays} days).`,
+  }
+}
+
+function getInsightSalesCycleCohortTable(cohorts, formatMonthLabel) {
+  if (!cohorts?.length) return null
+  const fastest = cohorts.reduce((a, b) => (a && b.avgDays < a.avgDays ? b : a), cohorts[0])
+  const slowest = cohorts.reduce((a, b) => (b.avgDays > (a?.avgDays ?? 0) ? b : a), null)
+  return {
+    title: 'Sales cycle by entry cohort',
+    content: `Fastest: ${formatMonthLabel(fastest?.month)} (${fastest?.avgDays} days). Slowest: ${formatMonthLabel(slowest?.month)} (${slowest?.avgDays} days). ${cohorts.length} cohorts.`,
+  }
+}
+
+function getInsightTimeInStageSummary(summary) {
+  if (!summary?.length) return null
+  const longest = summary.reduce((a, b) => (b.avgDays > (a?.avgDays ?? 0) ? b : a), null)
+  const shortest = summary.reduce((a, b) => (a && b.avgDays < a.avgDays ? b : a), summary[0])
+  return {
+    title: 'Time in stage – Summary',
+    content: `Longest avg: ${longest?.stage} (${longest?.avgDays} days). Shortest: ${shortest?.stage} (${shortest?.avgDays} days). Click a bar for deal-level details.`,
+  }
+}
+
+function getInsightTimeInStageCohorts(cohorts, formatMonthLabel) {
+  if (!cohorts?.length) return null
+  return {
+    title: 'Time in stage by entry cohort',
+    content: `${cohorts.length} entry cohorts. Each cell shows avg days in that stage for deals entering that month. Click a row for per-deal breakdown.`,
+  }
+}
+
 function formatDate(dateStr) {
   if (!dateStr || dateStr.trim() === '') return '-'
   const date = parseDate(dateStr)
@@ -249,6 +381,8 @@ function App() {
   const [salesCycleCohortModal, setSalesCycleCohortModal] = useState(null) // { month, deals: [...] }
   const [timeInStageCohortModal, setTimeInStageCohortModal] = useState(null) // { month, deals: [{ dealName, dealOwner, daysInStage }] }
   const [timeInStageBarModal, setTimeInStageBarModal] = useState(null) // { stage, deals, avgDays, medianDays }
+  const [insightModal, setInsightModal] = useState(null) // { title, content }
+  const [stageConversionModal, setStageConversionModal] = useState(null) // { stage, nextStage, deals }
   const [timeInStageDealFilter, setTimeInStageDealFilter] = useState('all') // 'all' | 'converted' | 'notConverted'
   const [entryDateStart, setEntryDateStart] = useState('')
   const [entryDateEnd, setEntryDateEnd] = useState('')
@@ -653,7 +787,7 @@ function App() {
     
     const dealsMap = new Map()
     
-    // Process all rows to track which stages each deal entered
+    // Process all rows to track which stages each deal entered and when
     data.rawRows.forEach(row => {
       const dealName = String(row['Deal Name'] || '').trim()
       const dealOwner = String(row['Deal owner'] || '').trim()
@@ -664,18 +798,16 @@ function App() {
         dealsMap.set(key, {
           dealName,
           dealOwner,
-          stagesEntered: new Set(),
+          stageDates: {},
           enteredLive: false,
         })
       }
       
       const dealData = dealsMap.get(key)
-      
-      // Check which stages this deal entered
       stages.forEach(stage => {
         const col = stageToCol[stage]
         if (col && row[col] && row[col].trim() !== '') {
-          dealData.stagesEntered.add(stage)
+          dealData.stageDates[stage] = row[col].trim()
           if (stage === (pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live')) {
             dealData.enteredLive = true
           }
@@ -690,30 +822,50 @@ function App() {
       : list
     for (let i = 0; i < stages.length; i++) {
       const stage = stages[i]
-      const dealsInStage = filterByEntry(allDeals.filter(d => d.stagesEntered.has(stage)))
-      const dealsConverted = dealsInStage.filter(d => d.enteredLive).length
       const nextStage = i < stages.length - 1 ? stages[i + 1] : null
-      const dealsToNextStage = nextStage
-        ? filterByEntry(allDeals.filter(d =>
-            d.stagesEntered.has(stage) && d.stagesEntered.has(nextStage)
-          )).length
+      const laterStages = stages.slice(i + 1)
+      const dealsInStageRaw = filterByEntry(allDeals.filter(d => d.stageDates[stage]))
+      const dealsConverted = dealsInStageRaw.filter(d => d.enteredLive).length
+      // Count deals that progressed to ANY later stage (not just the immediate next), incl. stage skips
+      const dealsProgressedCount = laterStages.length > 0
+        ? dealsInStageRaw.filter(d => laterStages.some(s => d.stageDates[s])).length
         : dealsConverted
       
-      const stageConversion = dealsInStage.length > 0
-        ? Math.round((dealsToNextStage / dealsInStage.length) * 1000) / 10
+      const stageConversionVal = dealsInStageRaw.length > 0
+        ? Math.round((dealsProgressedCount / dealsInStageRaw.length) * 1000) / 10
+        : 0
+      const overallConversionVal = dealsInStageRaw.length > 0
+        ? Math.round((dealsConverted / dealsInStageRaw.length) * 1000) / 10
         : 0
       
-      const overallConversion = dealsInStage.length > 0
-        ? Math.round((dealsConverted / dealsInStage.length) * 1000) / 10
-        : 0
+      const deals = dealsInStageRaw.map(d => {
+        const stageEntries = Object.entries(d.stageDates).map(([s, dateStr]) => ({ stage: s, date: parseDate(dateStr) })).filter(x => x.date)
+        const latest = stageEntries.sort((a, b) => b.date - a.date)[0]
+        const laterStageEntries = laterStages
+          .map(s => ({ stage: s, dateStr: d.stageDates[s], date: parseDate(d.stageDates[s]) }))
+          .filter(x => x.date)
+          .sort((a, b) => a.date - b.date)
+        const firstLater = laterStageEntries[0]
+        return {
+          dealName: d.dealName,
+          dealOwner: d.dealOwner,
+          entryDate: d.stageDates[stage],
+          exitDate: firstLater?.dateStr ?? null,
+          exitStage: firstLater?.stage ?? null,
+          progressedForward: laterStages.some(s => d.stageDates[s]),
+          converted: d.enteredLive,
+          currentStage: latest?.stage ?? stage,
+        }
+      })
       
       results.push({
         stage,
-        dealsInStage: dealsInStage.length,
-        dealsToNextStage: nextStage ? dealsToNextStage : dealsConverted,
+        dealsInStage: dealsInStageRaw.length,
+        dealsProgressed: dealsProgressedCount,
         nextStage: nextStage || 'Live',
-        stageConversion,
-        overallConversion,
+        stageConversion: stageConversionVal,
+        overallConversion: overallConversionVal,
+        deals,
       })
     }
     
@@ -1557,7 +1709,20 @@ function App() {
 
       <main className="main app-content-width">
         <div className="card chart-card">
-          <h2 className="card-title">Deal Stage Breakdown</h2>
+          <div className="section-header-with-insight">
+            <h2 className="card-title section-title">Deal Stage Breakdown</h2>
+            {rechartsData?.length > 0 && (
+              <button
+                type="button"
+                className="insight-icon-btn"
+                onClick={() => { const i = getInsightDealStageBreakdown(rechartsData, dataType, formatMonthLabel); if (i) setInsightModal(i); }}
+                title="View insights"
+                aria-label="View insights"
+              >
+                💡
+              </button>
+            )}
+          </div>
           <p className="card-desc">
             {dataType === 'count'
               ? 'Stacked column chart showing the number of active deals by stage at each month-end.'
@@ -1669,9 +1834,22 @@ function App() {
 
           {movementsMonthLabel && (
             <div className="movements-section">
-              <h3 className="movements-title">
-                Pipeline movements – {movementsMonthLabel}
-              </h3>
+              <div className="section-header-with-insight">
+                <h3 className="movements-title section-title">
+                  Pipeline movements – {movementsMonthLabel}
+                </h3>
+                {pipelineMovements.length > 0 && (
+                  <button
+                    type="button"
+                    className="insight-icon-btn"
+                    onClick={() => { const i = getInsightPipelineMovements(pipelineMovements, movementsMonthLabel); if (i) setInsightModal(i); }}
+                    title="View insights"
+                    aria-label="View insights"
+                  >
+                    💡
+                  </button>
+                )}
+              </div>
               <p className="movements-desc">
                 Deals that changed stage in this month (from → to).
               </p>
@@ -1714,7 +1892,18 @@ function App() {
             
             {/* Overall Conversion */}
             <div className="conversion-overall">
-              <h3 className="conversion-subtitle">Overall Conversion Rate</h3>
+              <div className="section-header-with-insight">
+                <h3 className="conversion-subtitle section-title">Overall Conversion Rate</h3>
+                <button
+                  type="button"
+                  className="insight-icon-btn"
+                  onClick={() => { const i = getInsightOverallConversion(overallConversion); if (i) setInsightModal(i); }}
+                  title="View insights"
+                  aria-label="View insights"
+                >
+                  💡
+                </button>
+              </div>
               <div className="conversion-stats">
                 <div className="conversion-stat">
                   <div className="conversion-stat-value">{overallConversion.conversionRate}%</div>
@@ -1734,24 +1923,35 @@ function App() {
             {/* Stage-by-Stage Conversion */}
             {stageConversion.length > 0 && (
               <div className="conversion-stages">
-                <h3 className="conversion-subtitle">Stage-by-Stage Conversion</h3>
+                <div className="section-header-with-insight">
+                  <h3 className="conversion-subtitle section-title">Stage-by-Stage Conversion</h3>
+                  <button
+                    type="button"
+                    className="insight-icon-btn"
+                    onClick={() => { const i = getInsightStageConversion(stageConversion); if (i) setInsightModal(i); }}
+                    title="View insights"
+                    aria-label="View insights"
+                  >
+                    💡
+                  </button>
+                </div>
                 <div className="conversion-table-wrapper">
                   <table className="conversion-table">
                     <thead>
                       <tr>
                         <th>Stage</th>
                         <th>Deals in Stage</th>
-                        <th>Moved to Next</th>
+                        <th>Progressed</th>
                         <th>Stage Conversion</th>
                         <th>Overall Conversion</th>
                       </tr>
                     </thead>
                     <tbody>
                       {stageConversion.map((s, i) => (
-                        <tr key={i}>
+                        <tr key={i} className="cohort-row" onClick={() => setStageConversionModal({ stage: s.stage, nextStage: s.nextStage, deals: s.deals ?? [] })} style={{ cursor: 'pointer' }}>
                           <td className="stage-name">{s.stage}</td>
                           <td>{s.dealsInStage}</td>
-                          <td>{s.dealsToNextStage}</td>
+                          <td>{s.dealsProgressed}</td>
                           <td>
                             <span className={`conversion-badge ${s.stageConversion >= 50 ? 'high' : s.stageConversion >= 25 ? 'medium' : 'low'}`}>
                               {s.stageConversion}%
@@ -1773,7 +1973,18 @@ function App() {
             {/* Monthly Conversion Trends */}
             {monthlyConversionTrends.length > 0 && (
               <div className="conversion-trends">
-                <h3 className="conversion-subtitle">Monthly Conversion Trends</h3>
+                <div className="section-header-with-insight">
+                  <h3 className="conversion-subtitle section-title">Monthly Conversion Trends</h3>
+                  <button
+                    type="button"
+                    className="insight-icon-btn"
+                    onClick={() => { const i = getInsightMonthlyConversionTrends(monthlyConversionTrends, formatMonthLabel); if (i) setInsightModal(i); }}
+                    title="View insights"
+                    aria-label="View insights"
+                  >
+                    💡
+                  </button>
+                </div>
                 <div className="chart-inner" style={{ minHeight: 300 }}>
                   <ResponsiveContainer width="100%" height={300}>
                     <ComposedChart data={monthlyConversionTrends}>
@@ -1831,7 +2042,18 @@ function App() {
             {/* Cohort Conversion */}
             {cohortConversion.length > 0 && (
               <div className="conversion-cohorts">
-                <h3 className="conversion-subtitle">Cohort Conversion Analysis</h3>
+                <div className="section-header-with-insight">
+                  <h3 className="conversion-subtitle section-title">Cohort Conversion Analysis</h3>
+                  <button
+                    type="button"
+                    className="insight-icon-btn"
+                    onClick={() => { const i = getInsightCohortConversion(cohortConversion, formatMonthLabel); if (i) setInsightModal(i); }}
+                    title="View insights"
+                    aria-label="View insights"
+                  >
+                    💡
+                  </button>
+                </div>
                 <div className="conversion-table-wrapper">
                   <table className="conversion-table">
                     <thead>
@@ -1874,7 +2096,18 @@ function App() {
             </p>
             
             <div className="conversion-overall">
-              <h3 className="conversion-subtitle">Overall Sales Cycle</h3>
+              <div className="section-header-with-insight">
+                <h3 className="conversion-subtitle section-title">Overall Sales Cycle</h3>
+                <button
+                  type="button"
+                  className="insight-icon-btn"
+                  onClick={() => { const i = getInsightOverallSalesCycle(overallSalesCycle); if (i) setInsightModal(i); }}
+                  title="View insights"
+                  aria-label="View insights"
+                >
+                  💡
+                </button>
+              </div>
               <div className="conversion-stats">
                 <div className="conversion-stat">
                   <div className="conversion-stat-value">{overallSalesCycle.avgDays}</div>
@@ -1898,7 +2131,18 @@ function App() {
             {salesCycleCohorts.length > 0 && (
               <>
                 <div className="conversion-trends">
-                  <h3 className="conversion-subtitle">Avg days to Live by entry month</h3>
+                  <div className="section-header-with-insight">
+                    <h3 className="conversion-subtitle section-title">Avg days to Live by entry month</h3>
+                    <button
+                      type="button"
+                      className="insight-icon-btn"
+                      onClick={() => { const i = getInsightSalesCycleByMonth(salesCycleCohorts, formatMonthLabel); if (i) setInsightModal(i); }}
+                      title="View insights"
+                      aria-label="View insights"
+                    >
+                      💡
+                    </button>
+                  </div>
                   <div className="chart-inner" style={{ minHeight: 480 }}>
                     <ResponsiveContainer width="100%" height={480}>
                       <BarChart data={salesCycleCohorts} margin={{ top: 16, right: 20, left: 20, bottom: 100 }}>
@@ -1934,7 +2178,18 @@ function App() {
                 </div>
 
                 <div className="conversion-cohorts">
-                  <h3 className="conversion-subtitle">Sales cycle by entry cohort</h3>
+                  <div className="section-header-with-insight">
+                    <h3 className="conversion-subtitle section-title">Sales cycle by entry cohort</h3>
+                    <button
+                      type="button"
+                      className="insight-icon-btn"
+                      onClick={() => { const i = getInsightSalesCycleCohortTable(salesCycleCohorts, formatMonthLabel); if (i) setInsightModal(i); }}
+                      title="View insights"
+                      aria-label="View insights"
+                    >
+                      💡
+                    </button>
+                  </div>
                   <div className="conversion-table-wrapper">
                     <table className="conversion-table">
                       <thead>
@@ -2000,7 +2255,18 @@ function App() {
             </div>
             
             <div className="conversion-overall">
-              <h3 className="conversion-subtitle">Summary by stage</h3>
+              <div className="section-header-with-insight">
+                <h3 className="conversion-subtitle section-title">Summary by stage</h3>
+                <button
+                  type="button"
+                  className="insight-icon-btn"
+                  onClick={() => { const i = getInsightTimeInStageSummary(timeInStageSummary); if (i) setInsightModal(i); }}
+                  title="View insights"
+                  aria-label="View insights"
+                >
+                  💡
+                </button>
+              </div>
               <div className="chart-inner" style={{ minHeight: 400 }}>
                 <ResponsiveContainer width="100%" height={400}>
                   <ComposedChart
@@ -2085,7 +2351,18 @@ function App() {
 
             {timeInStageCohorts.length > 0 && (
               <div className="conversion-cohorts">
-                <h3 className="conversion-subtitle">Time in stage by entry cohort</h3>
+                <div className="section-header-with-insight">
+                  <h3 className="conversion-subtitle section-title">Time in stage by entry cohort</h3>
+                  <button
+                    type="button"
+                    className="insight-icon-btn"
+                    onClick={() => { const i = getInsightTimeInStageCohorts(timeInStageCohorts, formatMonthLabel); if (i) setInsightModal(i); }}
+                    title="View insights"
+                    aria-label="View insights"
+                  >
+                    💡
+                  </button>
+                </div>
                 <div className="conversion-table-wrapper">
                   <table className="conversion-table conversion-table--time-cohort">
                     <thead>
@@ -2115,6 +2392,64 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Stage Conversion Details Modal */}
+      {stageConversionModal && (
+        <div className="modal-overlay" onClick={() => setStageConversionModal(null)}>
+          <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Stage: {stageConversionModal.stage}</h3>
+              <button className="modal-close" onClick={() => setStageConversionModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="cohort-summary">
+                {stageConversionModal.deals.length} deal{stageConversionModal.deals.length !== 1 ? 's' : ''} entered this stage. {stageConversionModal.deals.filter(d => d.progressedForward).length} progressed to a later stage (incl. stage skips). {stageConversionModal.deals.filter(d => d.converted).length} reached Live.
+              </p>
+              <div className="conversion-table-wrapper">
+                <table className="deal-table">
+                  <thead>
+                    <tr>
+                      <th>Deal Name</th>
+                      <th>Deal Owner</th>
+                      <th>Current stage</th>
+                      <th>Entered stage</th>
+                      <th>First progressed to</th>
+                      <th>Converted to Live</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...stageConversionModal.deals].sort((a, b) => (a.converted === b.converted ? 0 : a.converted ? -1 : 1)).map((d, i) => (
+                      <tr key={i}>
+                        <td>{d.dealName}</td>
+                        <td>{d.dealOwner}</td>
+                        <td>{d.currentStage ?? '–'}</td>
+                        <td>{d.entryDate ? formatDate(d.entryDate) : '–'}</td>
+                        <td>{d.exitStage ? `${d.exitStage} (${formatDate(d.exitDate)})` : '–'}</td>
+                        <td>{d.converted ? <span className="status-badge converted">Yes</span> : <span className="status-badge not-converted">No</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Insight Modal */}
+      {insightModal && (
+        <div className="modal-overlay" onClick={() => setInsightModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <h3>{insightModal.title}</h3>
+              <button className="modal-close" onClick={() => setInsightModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="insight-modal-content">{insightModal.content}</p>
+            </div>
           </div>
         </div>
       )}
