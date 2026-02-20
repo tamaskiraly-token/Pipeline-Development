@@ -608,6 +608,10 @@ body {
   flex-direction: column;
 }
 
+.modal--wide {
+  max-width: 1200px;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -773,6 +777,28 @@ body {
   margin-top: 32px;
 }
 
+.time-in-stage-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.time-in-stage-filter-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #718096;
+}
+
+@media (max-width: 768px) {
+  .time-in-stage-filter {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .conversion-overall {
   margin-bottom: 32px;
   padding-bottom: 24px;
@@ -858,6 +884,13 @@ body {
 
 .cohort-row:hover {
   background: #f0f9ff !important;
+}
+
+.conversion-table--time-cohort th,
+.conversion-table--time-cohort td {
+  font-size: 12px;
+  padding: 8px 10px;
+  min-width: 48px;
 }
 
 .cohort-summary {

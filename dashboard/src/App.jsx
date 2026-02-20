@@ -246,6 +246,8 @@ function App() {
   const [chartHeight, setChartHeight] = useState(750)
   const [cohortModal, setCohortModal] = useState(null) // { month, deals: [...] }
   const [salesCycleCohortModal, setSalesCycleCohortModal] = useState(null) // { month, deals: [...] }
+  const [timeInStageCohortModal, setTimeInStageCohortModal] = useState(null) // { month, deals: [{ dealName, dealOwner, daysInStage }] }
+  const [timeInStageDealFilter, setTimeInStageDealFilter] = useState('all') // 'all' | 'converted' | 'notConverted'
   const [entryDateStart, setEntryDateStart] = useState('')
   const [entryDateEnd, setEntryDateEnd] = useState('')
   
@@ -265,6 +267,7 @@ function App() {
     setDealNameSearch('')
     setEntryDateStart('')
     setEntryDateEnd('')
+    setTimeInStageDealFilter('all')
   }, [pipeline])
 
   useEffect(() => {
@@ -1129,6 +1132,133 @@ function App() {
     setSalesCycleCohortModal({ month: cohort.month, deals: cohort.deals })
   }
 
+  const handleTimeInStageCohortClick = (cohort) => {
+    setTimeInStageCohortModal({ month: cohort.month, deals: cohort.deals ?? [] })
+  }
+
+  const STAGES_CONFIG_TIME = pipeline === 'Direct Sales'
+    ? [['1 - Target', '1 - Target'], ['2 - Qualified', '2 - Qualified'], ['3 - Proposal', '3 - Proposal'], ['4 - Shortlist', '4 - Shortlist'], ['5 - Negotiate', '5 - Negotiate'], ['6 - Contract Out', '6 - Contract Out'], ['7 - Deal Approval', '7 - Deal Approval'], ['8 - Closed Won', '8 - Closed Won'], ['9 - Implementation', '9 - Implementation'], ['10 - Live', '10 - Live']]
+    : [['0 - Dormant', '0 - Dormant'], ['i - Identified or Unknown', 'i - Identified or Unknown'], ['ii - Qualified/ Proposal', 'ii - Qualified/Proposal'], ['iii - Negotiation', 'iii - Negotiation'], ['iv - Closed Won', 'iv - Closed Won'], ['v - Implementation', 'v - Implementation'], ['vi - Live', 'vi - Live']]
+  const STAGES_FOR_TIME = STAGES_CONFIG_TIME.map(([, d]) => d)
+
+  const timeInStageSummary = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return []
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStage = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    const liveCol = Object.entries(colToStage).find(([, s]) => s === liveStage)?.[0]
+    const stageToCol = {}
+    for (const [col, stageShort] of Object.entries(colToStage)) {
+      const cfg = STAGES_CONFIG_TIME.find(([short]) => short === stageShort)
+      if (cfg) stageToCol[cfg[1]] = col
+    }
+    const daysByStage = {}
+    STAGES_FOR_TIME.forEach(s => { daysByStage[s] = [] })
+    data.rawRows.forEach(row => {
+      const key = `${String(row['Deal Name'] || '').trim()}|${String(row['Deal owner'] || '').trim()}`
+      if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
+      const isConverted = liveCol && row[liveCol] && String(row[liveCol]).trim() !== ''
+      if (timeInStageDealFilter === 'converted' && !isConverted) return
+      if (timeInStageDealFilter === 'notConverted' && isConverted) return
+      const entries = []
+      STAGES_FOR_TIME.forEach(stage => {
+        const col = stageToCol[stage]
+        if (col && row[col] && row[col].trim() !== '') {
+          const d = parseDate(row[col])
+          if (d) entries.push({ stage, date: d })
+        }
+      })
+      entries.sort((a, b) => a.date - b.date)
+      for (let i = 0; i < entries.length - 1; i++) {
+        const days = Math.round((entries[i + 1].date - entries[i].date) / (1000 * 60 * 60 * 24))
+        if (days >= 0 && daysByStage[entries[i].stage]) {
+          daysByStage[entries[i].stage].push(days)
+        }
+      }
+    })
+    return STAGES_FOR_TIME.map(stage => {
+      const arr = daysByStage[stage] || []
+      if (arr.length === 0) return { stage, avgDays: null, count: 0, medianDays: null }
+      const sorted = [...arr].sort((a, b) => a - b)
+      const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
+      const median = sorted.length % 2 === 0
+        ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+        : sorted[Math.floor(sorted.length / 2)]
+      return { stage, avgDays: avg, count: arr.length, medianDays: median }
+    }).filter(s => s.count > 0)
+  }, [data, pipeline, dealsInEntryRangeSet, timeInStageDealFilter])
+
+  const timeInStageCohorts = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return []
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStage = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    const liveCol = Object.entries(colToStage).find(([, s]) => s === liveStage)?.[0]
+    const stageToCol = {}
+    for (const [col, stageShort] of Object.entries(colToStage)) {
+      const cfg = STAGES_CONFIG_TIME.find(([short]) => short === stageShort)
+      if (cfg) stageToCol[cfg[1]] = col
+    }
+    const cohortMap = new Map()
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      const key = `${dealName}|${dealOwner}`
+      if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
+      const isConverted = liveCol && row[liveCol] && String(row[liveCol]).trim() !== ''
+      if (timeInStageDealFilter === 'converted' && !isConverted) return
+      if (timeInStageDealFilter === 'notConverted' && isConverted) return
+      let entryMonth = null
+      let entryDate = null
+      const entries = []
+      STAGES_FOR_TIME.forEach(stage => {
+        const col = stageToCol[stage]
+        if (col && row[col] && row[col].trim() !== '') {
+          const d = parseDate(row[col])
+          if (d) {
+            entries.push({ stage, date: d })
+            const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+            if (!entryMonth || ym < entryMonth) { entryMonth = ym; entryDate = d }
+          }
+        }
+      })
+      if (!entryMonth) return
+      if (entryDateStart || entryDateEnd) {
+        const startM = entryDateStart ? entryDateStart.slice(0, 7) : null
+        const endM = entryDateEnd ? entryDateEnd.slice(0, 7) : null
+        if (startM && entryMonth < startM) return
+        if (endM && entryMonth > endM) return
+      }
+      if (!cohortMap.has(entryMonth)) {
+        cohortMap.set(entryMonth, { month: entryMonth, daysByStage: {}, deals: [] })
+      }
+      const cohort = cohortMap.get(entryMonth)
+      STAGES_FOR_TIME.forEach(s => { if (!cohort.daysByStage[s]) cohort.daysByStage[s] = [] })
+      entries.sort((a, b) => a.date - b.date)
+      const dealDaysInStage = {}
+      for (let i = 0; i < entries.length - 1; i++) {
+        const days = Math.round((entries[i + 1].date - entries[i].date) / (1000 * 60 * 60 * 24))
+        if (days >= 0 && cohort.daysByStage[entries[i].stage]) {
+          cohort.daysByStage[entries[i].stage].push(days)
+          dealDaysInStage[entries[i].stage] = days
+        }
+      }
+      if (Object.keys(dealDaysInStage).length > 0) {
+        cohort.deals.push({ dealName, dealOwner, daysInStage: dealDaysInStage })
+      }
+    })
+    return Array.from(cohortMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, c]) => {
+        const stageStats = STAGES_FOR_TIME.map(stage => {
+          const arr = c.daysByStage[stage] || []
+          if (arr.length === 0) return null
+          const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
+          return { stage, avgDays: avg, count: arr.length }
+        }).filter(Boolean)
+        return { month, stageStats, deals: c.deals }
+      })
+  }, [data, pipeline, dealsInEntryRangeSet, entryDateStart, entryDateEnd, timeInStageDealFilter])
+
   if (loading) return <div className="loading">Loading data from Google Sheets…</div>
   if (error) {
     return (
@@ -1818,6 +1948,171 @@ function App() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Time in Stage Analysis Section */}
+      {timeInStageSummary.length > 0 && (
+        <div className="conversion-section app-content-width">
+          <div className="card">
+            <h2 className="card-title">Average Time in Deal Stages</h2>
+            <p className="card-desc">
+              How many days deals typically spend in each stage before moving to the next. Based on deals that progressed through consecutive stages.
+            </p>
+
+            <div className="time-in-stage-filter">
+              <span className="time-in-stage-filter-label">Show deals:</span>
+              <div className="pipeline-tabs data-switcher-tabs">
+                <button
+                  className={`tab ${timeInStageDealFilter === 'all' ? 'tab-active' : ''}`}
+                  onClick={() => setTimeInStageDealFilter('all')}
+                >
+                  All
+                </button>
+                <button
+                  className={`tab ${timeInStageDealFilter === 'converted' ? 'tab-active' : ''}`}
+                  onClick={() => setTimeInStageDealFilter('converted')}
+                >
+                  Converted only
+                </button>
+                <button
+                  className={`tab ${timeInStageDealFilter === 'notConverted' ? 'tab-active' : ''}`}
+                  onClick={() => setTimeInStageDealFilter('notConverted')}
+                >
+                  Not converted
+                </button>
+              </div>
+            </div>
+            
+            <div className="conversion-overall">
+              <h3 className="conversion-subtitle">Summary by stage</h3>
+              <div className="chart-inner" style={{ minHeight: 400 }}>
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart
+                    data={timeInStageSummary}
+                    layout="vertical"
+                    margin={{ top: 16, right: 40, left: 120, bottom: 20 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#edf2f7" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                      label={{ value: 'Avg days', position: 'insideBottom', offset: -8 }}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="stage"
+                      width={110}
+                      tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                    />
+                    <Tooltip
+                      formatter={(value, name, { payload }) => [`${value} days (${payload?.count ?? 0} deals)`, payload?.stage ?? '']}
+                      contentStyle={{ fontFamily: "'DM Sans', sans-serif" }}
+                    />
+                    <Bar dataKey="avgDays" fill="#06b6d4" name="Avg days" radius={[0, 4, 4, 0]}>
+                      <LabelList dataKey="avgDays" position="right" style={{ fontSize: 11, fontWeight: 600 }} formatter={(v) => `${v}d`} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="conversion-table-wrapper" style={{ marginTop: 24 }}>
+                <table className="conversion-table">
+                  <thead>
+                    <tr>
+                      <th>Stage</th>
+                      <th>Avg days</th>
+                      <th>Median days</th>
+                      <th>Deals</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeInStageSummary.map((s, i) => (
+                      <tr key={i}>
+                        <td className="stage-name">{s.stage}</td>
+                        <td>{s.avgDays}</td>
+                        <td>{s.medianDays ?? '–'}</td>
+                        <td>{s.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {timeInStageCohorts.length > 0 && (
+              <div className="conversion-cohorts">
+                <h3 className="conversion-subtitle">Time in stage by entry cohort</h3>
+                <div className="conversion-table-wrapper">
+                  <table className="conversion-table conversion-table--time-cohort">
+                    <thead>
+                      <tr>
+                        <th>Entry Month</th>
+                        {STAGES_FOR_TIME.map((s, i) => (
+                          <th key={i}>{s.split(' - ')[0]}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {timeInStageCohorts.map((c, i) => (
+                        <tr key={i} className="cohort-row" onClick={() => handleTimeInStageCohortClick(c)} style={{ cursor: 'pointer' }}>
+                          <td>{formatMonthLabel(c.month)}</td>
+                          {STAGES_FOR_TIME.map((stage, j) => {
+                            const stat = c.stageStats?.find(x => x.stage === stage)
+                            return (
+                              <td key={j} title={stat ? `${stat.count} deals` : ''}>
+                                {stat ? `${stat.avgDays}d` : '–'}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Time in Stage Cohort Details Modal */}
+      {timeInStageCohortModal && (
+        <div className="modal-overlay" onClick={() => setTimeInStageCohortModal(null)}>
+          <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Time in stage – {formatMonthLabel(timeInStageCohortModal.month)}</h3>
+              <button className="modal-close" onClick={() => setTimeInStageCohortModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="cohort-summary">
+                {timeInStageCohortModal.deals.length} deal{timeInStageCohortModal.deals.length !== 1 ? 's' : ''} entered the pipeline in {formatMonthLabel(timeInStageCohortModal.month)}. Days spent in each stage.
+              </p>
+              <div className="conversion-table-wrapper">
+                <table className="deal-table conversion-table--time-cohort">
+                  <thead>
+                    <tr>
+                      <th>Deal Name</th>
+                      <th>Deal Owner</th>
+                      {STAGES_FOR_TIME.map((s, i) => (
+                        <th key={i}>{s.split(' - ')[0]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...timeInStageCohortModal.deals].sort((a, b) => a.dealName.localeCompare(b.dealName)).map((d, i) => (
+                      <tr key={i}>
+                        <td className="stage-name">{d.dealName}</td>
+                        <td>{d.dealOwner}</td>
+                        {STAGES_FOR_TIME.map((stage, j) => (
+                          <td key={j}>{d.daysInStage?.[stage] != null ? `${d.daysInStage[stage]}d` : '–'}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       )}
