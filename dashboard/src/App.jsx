@@ -66,7 +66,25 @@ function toRechartsFormat(chartData, monthLabels, includedStages) {
   })
 }
 
-function computeChartFromDealDetails(dealDetails, monthLabels, stages, selectedOwners, selectedDealNames, includedStages, metric = 'count') {
+function isDealInEntryRange(deal, dealEntryMap, entryDateStart, entryDateEnd) {
+  if (!entryDateStart && !entryDateEnd) return true
+  const key = `${deal.dealName}|${deal.dealOwner}`
+  const entry = dealEntryMap?.get(key)
+  if (!entry?.entryDate) return false
+  const entryDate = parseDate(entry.entryDate)
+  if (!entryDate) return false
+  if (entryDateStart) {
+    const start = parseDate(entryDateStart)
+    if (start && entryDate < start) return false
+  }
+  if (entryDateEnd) {
+    const end = parseDate(entryDateEnd)
+    if (end && entryDate > end) return false
+  }
+  return true
+}
+
+function computeChartFromDealDetails(dealDetails, monthLabels, stages, selectedOwners, selectedDealNames, includedStages, metric = 'count', dealEntryMap = null, entryDateStart = null, entryDateEnd = null) {
   if (!dealDetails || !monthLabels?.length || !stages?.length) return []
   const ownerSet = selectedOwners?.length ? new Set(selectedOwners) : null
   const dealNameSet = selectedDealNames?.length ? new Set(selectedDealNames) : null
@@ -75,6 +93,7 @@ function computeChartFromDealDetails(dealDetails, monthLabels, stages, selectedO
   const matchDeal = (d) => {
     if (ownerSet && !ownerSet.has(d.dealOwner)) return false
     if (dealNameSet && !dealNameSet.has(d.dealName)) return false
+    if (!isDealInEntryRange(d, dealEntryMap, entryDateStart, entryDateEnd)) return false
     return true
   }
   const agg = (deals) => {
@@ -184,6 +203,33 @@ function formatNumberShort(val) {
   return formatNumber(val)
 }
 
+function monthToStartDate(ym) {
+  if (!ym) return ''
+  return `${ym}-01`
+}
+
+function monthToEndDate(ym) {
+  if (!ym) return ''
+  const [y, m] = ym.split('-').map(Number)
+  const lastDay = new Date(y, m, 0).getDate()
+  return `${ym}-${String(lastDay).padStart(2, '0')}`
+}
+
+function dateToMonthIndex(dateStr, monthLabels) {
+  if (!dateStr || !monthLabels?.length) return -1
+  const ym = dateStr.slice(0, 7)
+  const idx = monthLabels.indexOf(ym)
+  return idx >= 0 ? idx : -1
+}
+
+function daysBetween(dateStr1, dateStr2) {
+  const d1 = parseDate(dateStr1)
+  const d2 = parseDate(dateStr2)
+  if (!d1 || !d2) return null
+  const ms = d2.getTime() - d1.getTime()
+  return Math.round(ms / (1000 * 60 * 60 * 24))
+}
+
 function App() {
   const [pipeline, setPipeline] = useState('Partner Management')
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -199,6 +245,9 @@ function App() {
   const [dataType, setDataType] = useState('count') // 'count' | 'amount' | 'monthlyTransactions'
   const [chartHeight, setChartHeight] = useState(750)
   const [cohortModal, setCohortModal] = useState(null) // { month, deals: [...] }
+  const [salesCycleCohortModal, setSalesCycleCohortModal] = useState(null) // { month, deals: [...] }
+  const [entryDateStart, setEntryDateStart] = useState('')
+  const [entryDateEnd, setEntryDateEnd] = useState('')
   
   useEffect(() => {
     const updateChartHeight = () => {
@@ -214,6 +263,8 @@ function App() {
     setSelectedOwners([])
     setSelectedDealNames([])
     setDealNameSearch('')
+    setEntryDateStart('')
+    setEntryDateEnd('')
   }, [pipeline])
 
   useEffect(() => {
@@ -268,9 +319,64 @@ function App() {
     return Array.from(set).sort()
   }, [dealDetails])
 
+  const dealEntryMap = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return new Map()
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const map = new Map()
+    data.rawRows.forEach((row) => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      const key = `${dealName}|${dealOwner}`
+      let earliestDate = null
+      let earliestDateStr = null
+      for (const [col] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && dateStr.trim() !== '') {
+          const date = parseDate(dateStr)
+          if (date && (!earliestDate || date < earliestDate)) {
+            earliestDate = date
+            earliestDateStr = dateStr
+          }
+        }
+      }
+      if (earliestDateStr) {
+        const existing = map.get(key)
+        if (!existing || earliestDate < parseDate(existing.entryDate)) {
+          map.set(key, {
+            entryMonth: earliestDate ? `${earliestDate.getFullYear()}-${String(earliestDate.getMonth() + 1).padStart(2, '0')}` : null,
+            entryDate: earliestDateStr,
+          })
+        }
+      }
+    })
+    return map
+  }, [data?.rawRows, data?.colToStageDS, data?.colToStagePM, pipeline])
+
+  const dealsInEntryRangeSet = useMemo(() => {
+    if (!entryDateStart && !entryDateEnd) return null
+    const set = new Set()
+    dealEntryMap.forEach((entry, key) => {
+      if (!entry?.entryDate) return
+      const entryDate = parseDate(entry.entryDate)
+      if (!entryDate) return
+      if (entryDateStart) {
+        const start = parseDate(entryDateStart)
+        if (start && entryDate < start) return
+      }
+      if (entryDateEnd) {
+        const end = parseDate(entryDateEnd)
+        if (end && entryDate > end) return
+      }
+      set.add(key)
+    })
+    return set
+  }, [dealEntryMap, entryDateStart, entryDateEnd])
+
   const allRechartsData = useMemo(() => {
+    const hasEntryDateFilter = !!(entryDateStart || entryDateEnd)
     const needsDealDetails =
-      dataType === 'amount' || dataType === 'monthlyTransactions' || selectedOwners.length > 0 || selectedDealNames.length > 0
+      dataType === 'amount' || dataType === 'monthlyTransactions' || selectedOwners.length > 0 || selectedDealNames.length > 0 || hasEntryDateFilter
     if (needsDealDetails && dealDetails) {
       return computeChartFromDealDetails(
         dealDetails,
@@ -279,12 +385,15 @@ function App() {
         selectedOwners,
         selectedDealNames,
         includedStages,
-        dataType
+        dataType,
+        dealEntryMap,
+        entryDateStart || null,
+        entryDateEnd || null
       )
     }
     if (dataType === 'amount' || dataType === 'monthlyTransactions') return [] // these modes need dealDetails
     return toRechartsFormat(chartData ?? [], data?.monthLabels ?? [], includedStages)
-  }, [chartData, data?.monthLabels, dealDetails, selectedOwners, selectedDealNames, includedStages, stages, dataType])
+  }, [chartData, data?.monthLabels, dealDetails, selectedOwners, selectedDealNames, includedStages, stages, dataType, dealEntryMap, entryDateStart, entryDateEnd])
 
   const rechartsData = useMemo(() => {
     if (!selectedMonth || selectedMonth === 'all') return allRechartsData
@@ -354,6 +463,9 @@ function App() {
     if (selectedDealNames.length > 0) {
       filtered = filtered.filter((d) => selectedDealNames.includes(d.dealName))
     }
+    if (entryDateStart || entryDateEnd) {
+      filtered = filtered.filter((d) => isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null))
+    }
     const sortedDeals = [...filtered].sort((a, b) => {
       if (a.dealStage !== b.dealStage) return String(a.dealStage).localeCompare(b.dealStage)
       return (b.amount || 0) - (a.amount || 0)
@@ -390,6 +502,7 @@ function App() {
       ? stages.filter((s) => includeSet.has(s))
       : stages
 
+    const entryDateFilterActive = !!(entryDateStart || entryDateEnd)
     const prevStageByDeal = new Map()
     if (prevMonth) {
       const prevData = dealDetails[prevMonth] || {}
@@ -397,6 +510,7 @@ function App() {
         ;(prevData[stage] || []).forEach((d) => {
           if (ownerSet && !ownerSet.has(d.dealOwner)) return
           if (dealNameSet && !dealNameSet.has(d.dealName)) return
+          if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
           prevStageByDeal.set(`${d.dealName}\n${d.dealOwner}`, stage)
         })
       })
@@ -408,6 +522,7 @@ function App() {
       ;(currData[toStage] || []).forEach((d) => {
         if (ownerSet && !ownerSet.has(d.dealOwner)) return
         if (dealNameSet && !dealNameSet.has(d.dealName)) return
+        if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
         const key = `${d.dealName}\n${d.dealOwner}`
         const fromStage = prevStageByDeal.get(key)
         if (fromStage === toStage) return
@@ -431,6 +546,9 @@ function App() {
     includedStages,
     selectedOwners,
     selectedDealNames,
+    dealEntryMap,
+    entryDateStart,
+    entryDateEnd,
   ])
 
   const movementsMonthLabel = useMemo(() => {
@@ -496,14 +614,17 @@ function App() {
       }
     })
     
-    // Count all deals with pipeline activity as total deals
-    const totalDeals = Array.from(dealsMap.values()).filter(d => d.hasPipelineActivity).length
-    // Count all deals that reached Live (regardless of entry point)
-    const convertedDeals = Array.from(dealsMap.values()).filter(d => d.enteredLive).length
+    // Filter by entry date range if set
+    const dealList = Array.from(dealsMap.values()).filter(d => d.hasPipelineActivity)
+    const filteredDealList = dealsInEntryRangeSet
+      ? dealList.filter(d => dealsInEntryRangeSet.has(`${d.dealName}|${d.dealOwner}`))
+      : dealList
+    const totalDeals = filteredDealList.length
+    const convertedDeals = filteredDealList.filter(d => d.enteredLive).length
     const conversionRate = totalDeals > 0 ? Math.round((convertedDeals / totalDeals) * 1000) / 10 : 0
     
     return { totalDeals, convertedDeals, conversionRate }
-  }, [data, pipeline])
+  }, [data, pipeline, dealsInEntryRangeSet])
 
   const stageConversion = useMemo(() => {
     if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return []
@@ -558,15 +679,19 @@ function App() {
     })
     
     const results = []
+    const allDeals = Array.from(dealsMap.values())
+    const filterByEntry = (list) => dealsInEntryRangeSet
+      ? list.filter(d => dealsInEntryRangeSet.has(`${d.dealName}|${d.dealOwner}`))
+      : list
     for (let i = 0; i < stages.length; i++) {
       const stage = stages[i]
-      const dealsInStage = Array.from(dealsMap.values()).filter(d => d.stagesEntered.has(stage))
+      const dealsInStage = filterByEntry(allDeals.filter(d => d.stagesEntered.has(stage)))
       const dealsConverted = dealsInStage.filter(d => d.enteredLive).length
       const nextStage = i < stages.length - 1 ? stages[i + 1] : null
       const dealsToNextStage = nextStage
-        ? Array.from(dealsMap.values()).filter(d => 
+        ? filterByEntry(allDeals.filter(d =>
             d.stagesEntered.has(stage) && d.stagesEntered.has(nextStage)
-          ).length
+          )).length
         : dealsConverted
       
       const stageConversion = dealsInStage.length > 0
@@ -588,7 +713,7 @@ function App() {
     }
     
     return results
-  }, [data, pipeline])
+  }, [data, pipeline, dealsInEntryRangeSet])
 
   const cohortConversion = useMemo(() => {
     if (!data?.rawRows || !data?.monthLabels?.length || !data?.colToStageDS || !data?.colToStagePM) return []
@@ -700,16 +825,34 @@ function App() {
       if (deal.converted) cohort.convertedDeals++
     })
     
-    cohortMap.forEach(cohort => {
+    const cohortList = Array.from(cohortMap.values())
+    if (dealsInEntryRangeSet) {
+      cohortList.forEach(cohort => {
+        cohort.deals = cohort.deals.filter(d => dealsInEntryRangeSet.has(`${d.dealName}|${d.dealOwner}`))
+        cohort.totalDeals = cohort.deals.length
+        cohort.convertedDeals = cohort.deals.filter(d => d.converted).length
+      })
+    }
+    cohortList.forEach(cohort => {
       cohort.conversionRate = cohort.totalDeals > 0
         ? Math.round((cohort.convertedDeals / cohort.totalDeals) * 1000) / 10
         : 0
-      // Sort deals by name
       cohort.deals.sort((a, b) => a.dealName.localeCompare(b.dealName))
     })
-    
-    return Array.from(cohortMap.values()).sort((a, b) => a.month.localeCompare(b.month))
-  }, [data, pipeline])
+    const sorted = cohortList.sort((a, b) => a.month.localeCompare(b.month))
+    if (dealsInEntryRangeSet) {
+      if (entryDateStart || entryDateEnd) {
+        const startMonth = entryDateStart ? entryDateStart.slice(0, 7) : null
+        const endMonth = entryDateEnd ? entryDateEnd.slice(0, 7) : null
+        return sorted.filter(c => {
+          if (startMonth && c.month < startMonth) return false
+          if (endMonth && c.month > endMonth) return false
+          return true
+        })
+      }
+    }
+    return sorted
+  }, [data, pipeline, dealsInEntryRangeSet, entryDateStart, entryDateEnd])
 
   const handleCohortRowClick = (cohort) => {
     setCohortModal({
@@ -808,13 +951,14 @@ function App() {
       const dealName = String(row['Deal Name'] || '').trim()
       const dealOwner = String(row['Deal owner'] || '').trim()
       if (!dealName) return
+      const key = `${dealName}|${dealOwner}`
+      if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
       
       const liveStageDate = row[liveStageCol]
       if (liveStageDate && liveStageDate.trim() !== '') {
         const date = parseDate(liveStageDate)
         if (date) {
           const convertedMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-          const key = `${dealName}|${dealOwner}`
           
           if (!dealsWentLiveSet.has(convertedMonth)) {
             dealsWentLiveSet.set(convertedMonth, new Set())
@@ -829,9 +973,25 @@ function App() {
       }
     })
     
-    return data.monthLabels.map(month => {
-      const dealsEntered = Array.from(dealsMap.values()).filter(d => d.entryMonth && d.entryMonth <= month).length
-      const dealsConverted = Array.from(dealsMap.values()).filter(
+    const filteredDeals = dealsInEntryRangeSet
+      ? Array.from(dealsMap.values()).filter(d => dealsInEntryRangeSet.has(`${d.dealName}|${d.dealOwner}`))
+      : Array.from(dealsMap.values())
+    
+    const monthList = data.monthLabels
+    let monthsToShow = monthList
+    if (entryDateStart || entryDateEnd) {
+      const startMonth = entryDateStart ? entryDateStart.slice(0, 7) : null
+      const endMonth = entryDateEnd ? entryDateEnd.slice(0, 7) : null
+      monthsToShow = monthList.filter(m => {
+        if (startMonth && m < startMonth) return false
+        if (endMonth && m > endMonth) return false
+        return true
+      })
+    }
+    
+    return monthsToShow.map(month => {
+      const dealsEntered = filteredDeals.filter(d => d.entryMonth && d.entryMonth <= month).length
+      const dealsConverted = filteredDeals.filter(
         d => d.entryMonth && d.entryMonth <= month && d.convertedMonth && d.convertedMonth <= month
       ).length
       const conversionRate = dealsEntered > 0
@@ -840,7 +1000,134 @@ function App() {
       const dealsWentLive = dealsWentLiveByMonth.get(month) || 0
       return { month, dealsEntered, dealsConverted, conversionRate, dealsWentLive }
     })
-  }, [data, pipeline])
+  }, [data, pipeline, dealsInEntryRangeSet, entryDateStart, entryDateEnd])
+
+  const overallSalesCycle = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return null
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    let liveStageCol = null
+    for (const [col, stage] of Object.entries(colToStage)) {
+      if (stage === liveStageShort) { liveStageCol = col; break }
+    }
+    if (!liveStageCol) return null
+    const dealsMap = new Map()
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      const key = `${dealName}|${dealOwner}`
+      if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
+      let earliestDateStr = null
+      for (const [col] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && dateStr.trim() !== '') {
+          const date = parseDate(dateStr)
+          if (date && (!earliestDateStr || date < parseDate(earliestDateStr))) {
+            earliestDateStr = dateStr
+          }
+        }
+      }
+      const liveDateStr = row[liveStageCol]
+      if (!earliestDateStr || !liveDateStr || !liveDateStr.trim()) return
+      const days = daysBetween(earliestDateStr, liveDateStr)
+      if (days == null || days < 0) return
+      if (!dealsMap.has(key)) {
+        dealsMap.set(key, { dealName, dealOwner, days })
+      }
+    })
+    const daysList = Array.from(dealsMap.values()).map(d => d.days).filter(d => d >= 0)
+    if (daysList.length === 0) return null
+    const sorted = [...daysList].sort((a, b) => a - b)
+    const sum = daysList.reduce((a, b) => a + b, 0)
+    const avgDays = Math.round(sum / daysList.length)
+    const medianDays = sorted.length % 2 === 0
+      ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+      : sorted[Math.floor(sorted.length / 2)]
+    return {
+      avgDays,
+      medianDays,
+      count: daysList.length,
+      minDays: sorted[0],
+      maxDays: sorted[sorted.length - 1],
+    }
+  }, [data, pipeline, dealsInEntryRangeSet])
+
+  const salesCycleCohorts = useMemo(() => {
+    if (!data?.rawRows || !data?.colToStageDS || !data?.colToStagePM) return []
+    const colToStage = pipeline === 'Direct Sales' ? data.colToStageDS : data.colToStagePM
+    const liveStageShort = pipeline === 'Direct Sales' ? '10 - Live' : 'vi - Live'
+    let liveStageCol = null
+    for (const [col, stage] of Object.entries(colToStage)) {
+      if (stage === liveStageShort) { liveStageCol = col; break }
+    }
+    if (!liveStageCol) return []
+    const cohortMap = new Map()
+    data.rawRows.forEach(row => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+      const key = `${dealName}|${dealOwner}`
+      if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
+      let earliestDate = null
+      let earliestDateStr = null
+      let earliestMonth = null
+      for (const [col] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && dateStr.trim() !== '') {
+          const date = parseDate(dateStr)
+          if (date && (!earliestDate || date < earliestDate)) {
+            earliestDate = date
+            earliestDateStr = dateStr
+            earliestMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+          }
+        }
+      }
+      const liveDateStr = row[liveStageCol]
+      if (!earliestMonth || !earliestDateStr || !liveDateStr || !liveDateStr.trim()) return
+      const days = daysBetween(earliestDateStr, liveDateStr)
+      if (days == null || days < 0) return
+      if (!cohortMap.has(earliestMonth)) {
+        cohortMap.set(earliestMonth, { month: earliestMonth, deals: [] })
+      }
+      cohortMap.get(earliestMonth).deals.push({
+        dealName,
+        dealOwner,
+        entryDate: earliestDateStr,
+        liveDate: liveDateStr,
+        days,
+      })
+    })
+    let cohortList = Array.from(cohortMap.values())
+    if (entryDateStart || entryDateEnd) {
+      const startMonth = entryDateStart ? entryDateStart.slice(0, 7) : null
+      const endMonth = entryDateEnd ? entryDateEnd.slice(0, 7) : null
+      cohortList = cohortList.filter(c => {
+        if (startMonth && c.month < startMonth) return false
+        if (endMonth && c.month > endMonth) return false
+        return true
+      })
+    }
+    return cohortList.map(c => {
+      const daysList = c.deals.map(d => d.days)
+      const sorted = [...daysList].sort((a, b) => a - b)
+      const sum = daysList.reduce((a, b) => a + b, 0)
+      return {
+        ...c,
+        avgDays: Math.round(sum / daysList.length),
+        medianDays: sorted.length % 2 === 0
+          ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+          : sorted[Math.floor(sorted.length / 2)],
+        count: daysList.length,
+        minDays: sorted[0],
+        maxDays: sorted[sorted.length - 1],
+      }
+    }).sort((a, b) => a.month.localeCompare(b.month))
+  }, [data, pipeline, dealsInEntryRangeSet, entryDateStart, entryDateEnd])
+
+  const handleSalesCycleCohortClick = (cohort) => {
+    setSalesCycleCohortModal({ month: cohort.month, deals: cohort.deals })
+  }
 
   if (loading) return <div className="loading">Loading data from Google Sheets…</div>
   if (error) {
@@ -1031,6 +1318,94 @@ function App() {
               {allDealNames.filter((name) => !dealNameSearch.trim() || name.toLowerCase().includes(dealNameSearch.trim().toLowerCase())).length === 0 && (
                 <p className="filter-empty">No matching deal names</p>
               )}
+            </div>
+          )}
+        </div>
+        <div className="filter-dropdown">
+          <button
+            className="filter-dropdown-btn"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setFilterOpen((f) => (f === 'entryDate' ? null : 'entryDate')); }}
+          >
+            Pipeline Entry {!(entryDateStart || entryDateEnd) ? '(All)' : `(${entryDateStart || '…'} – ${entryDateEnd || '…'}) ▾`}
+          </button>
+          {filterOpen === 'entryDate' && (
+            <div className="filter-dropdown-panel filter-dropdown-panel--dates" onClick={(e) => e.stopPropagation()}>
+              <span className="filter-hint">Show only deals that entered the pipeline between:</span>
+              {data?.monthLabels?.length > 0 && (() => {
+                const labels = data.monthLabels
+                const startIdx = dateToMonthIndex(entryDateStart, labels)
+                const endIdx = dateToMonthIndex(entryDateEnd, labels)
+                const startVal = startIdx >= 0 ? startIdx : 0
+                const endVal = endIdx >= 0 ? endIdx : labels.length - 1
+                const safeStartVal = Math.min(startVal, endVal)
+                const safeEndVal = Math.max(startVal, endVal)
+                return (
+                <div className="filter-slider-wrap">
+                  <div className="filter-slider-row">
+                    <span className="filter-slider-label">Start</span>
+                    <input
+                      type="range"
+                      className="filter-range-input"
+                      min={0}
+                      max={labels.length - 1}
+                      value={safeStartVal}
+                      onChange={(e) => {
+                        const idx = Number(e.target.value)
+                        const currentEnd = endIdx >= 0 ? endIdx : labels.length - 1
+                        setEntryDateStart(monthToStartDate(labels[idx]))
+                        if (idx > currentEnd) setEntryDateEnd(monthToEndDate(labels[idx]))
+                      }}
+                    />
+                    <span className="filter-slider-value">{formatMonthLabel(labels[safeStartVal])}</span>
+                  </div>
+                  <div className="filter-slider-row">
+                    <span className="filter-slider-label">End</span>
+                    <input
+                      type="range"
+                      className="filter-range-input"
+                      min={0}
+                      max={labels.length - 1}
+                      value={safeEndVal}
+                      onChange={(e) => {
+                        const idx = Number(e.target.value)
+                        const currentStart = startIdx >= 0 ? startIdx : 0
+                        setEntryDateEnd(monthToEndDate(labels[idx]))
+                        if (idx < currentStart) setEntryDateStart(monthToStartDate(labels[idx]))
+                      }}
+                    />
+                    <span className="filter-slider-value">{formatMonthLabel(labels[safeEndVal])}</span>
+                  </div>
+                </div>
+                )
+              })()}
+              <div className="filter-date-row">
+                <label className="filter-date-label">
+                  <span>Start</span>
+                  <input
+                    type="date"
+                    className="filter-date-input"
+                    value={entryDateStart}
+                    onChange={(e) => setEntryDateStart(e.target.value)}
+                  />
+                </label>
+                <label className="filter-date-label">
+                  <span>End</span>
+                  <input
+                    type="date"
+                    className="filter-date-input"
+                    value={entryDateEnd}
+                    onChange={(e) => setEntryDateEnd(e.target.value)}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                className="filter-date-clear"
+                onClick={() => { setEntryDateStart(''); setEntryDateEnd(''); }}
+              >
+                Clear
+              </button>
             </div>
           )}
         </div>
@@ -1341,6 +1716,147 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Sales Cycle Analysis Section */}
+      {overallSalesCycle && (
+        <div className="conversion-section">
+          <div className="card">
+            <h2 className="card-title">Sales Cycle Analysis</h2>
+            <p className="card-desc">
+              Average time from first pipeline stage to Live. Measures how long it takes for deals to complete the funnel.
+            </p>
+            
+            <div className="conversion-overall">
+              <h3 className="conversion-subtitle">Overall Sales Cycle</h3>
+              <div className="conversion-stats">
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallSalesCycle.avgDays}</div>
+                  <div className="conversion-stat-label">Avg days to Live</div>
+                </div>
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallSalesCycle.medianDays}</div>
+                  <div className="conversion-stat-label">Median days</div>
+                </div>
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallSalesCycle.count}</div>
+                  <div className="conversion-stat-label">Deals (reached Live)</div>
+                </div>
+                <div className="conversion-stat">
+                  <div className="conversion-stat-value">{overallSalesCycle.minDays} – {overallSalesCycle.maxDays}</div>
+                  <div className="conversion-stat-label">Min – Max days</div>
+                </div>
+              </div>
+            </div>
+
+            {salesCycleCohorts.length > 0 && (
+              <>
+                <div className="conversion-trends">
+                  <h3 className="conversion-subtitle">Avg days to Live by entry month</h3>
+                  <div className="chart-inner" style={{ minHeight: 480 }}>
+                    <ResponsiveContainer width="100%" height={480}>
+                      <BarChart data={salesCycleCohorts} margin={{ top: 16, right: 20, left: 20, bottom: 100 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#edf2f7" />
+                        <XAxis
+                          dataKey="month"
+                          tickFormatter={(v) => formatMonthLabel(v)}
+                          tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                          angle={-45}
+                          textAnchor="end"
+                          height={80}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
+                          label={{ value: 'Avg days to Live', angle: -90, position: 'insideLeft' }}
+                        />
+                        <Tooltip
+                          formatter={(value) => [value, 'Avg days']}
+                          labelFormatter={(label) => `Entry: ${formatMonthLabel(label)}`}
+                          contentStyle={{ fontFamily: "'DM Sans', sans-serif" }}
+                        />
+                        <Bar
+                          dataKey="avgDays"
+                          fill="#8b5cf6"
+                          name="Avg days to Live"
+                          radius={[4, 4, 0, 0]}
+                        >
+                          <LabelList dataKey="avgDays" position="top" style={{ fontSize: 11, fontWeight: 600 }} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="conversion-cohorts">
+                  <h3 className="conversion-subtitle">Sales cycle by entry cohort</h3>
+                  <div className="conversion-table-wrapper">
+                    <table className="conversion-table">
+                      <thead>
+                        <tr>
+                          <th>Entry Month</th>
+                          <th>Deals</th>
+                          <th>Avg days</th>
+                          <th>Median days</th>
+                          <th>Min – Max</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {salesCycleCohorts.map((c, i) => (
+                          <tr key={i} className="cohort-row" onClick={() => handleSalesCycleCohortClick(c)} style={{ cursor: 'pointer' }}>
+                            <td>{formatMonthLabel(c.month)}</td>
+                            <td>{c.count}</td>
+                            <td>{c.avgDays}</td>
+                            <td>{c.medianDays}</td>
+                            <td>{c.minDays} – {c.maxDays}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Sales Cycle Cohort Details Modal */}
+      {salesCycleCohortModal && (
+        <div className="modal-overlay" onClick={() => setSalesCycleCohortModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Sales cycle – {formatMonthLabel(salesCycleCohortModal.month)}</h3>
+              <button className="modal-close" onClick={() => setSalesCycleCohortModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="cohort-summary">
+                {salesCycleCohortModal.deals.length} deal{salesCycleCohortModal.deals.length !== 1 ? 's' : ''} reached Live from this entry month.
+              </p>
+              <table className="deal-table">
+                <thead>
+                  <tr>
+                    <th>Deal Name</th>
+                    <th>Deal Owner</th>
+                    <th>Entry Date</th>
+                    <th>Went Live</th>
+                    <th>Days</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...salesCycleCohortModal.deals].sort((a, b) => a.days - b.days).map((d, i) => (
+                    <tr key={i}>
+                      <td>{d.dealName}</td>
+                      <td>{d.dealOwner}</td>
+                      <td>{d.entryDate ? formatDate(d.entryDate) : '-'}</td>
+                      <td>{d.liveDate ? formatDate(d.liveDate) : '-'}</td>
+                      <td>{d.days}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
