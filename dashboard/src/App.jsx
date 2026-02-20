@@ -1182,6 +1182,7 @@ function App() {
             dealOwner,
             entryDate: entries[i].dateStr,
             exitDate: entries[i + 1].dateStr,
+            exitStage: entries[i + 1].stage,
             days,
           })
         }
@@ -2135,6 +2136,7 @@ function App() {
                       <th>Deal Owner</th>
                       <th>Entered</th>
                       <th>Exited</th>
+                      <th>Exited to</th>
                       <th>Days</th>
                     </tr>
                   </thead>
@@ -2145,6 +2147,7 @@ function App() {
                         <td>{d.dealOwner}</td>
                         <td>{d.entryDate ? formatDate(d.entryDate) : '–'}</td>
                         <td>{d.exitDate ? formatDate(d.exitDate) : '–'}</td>
+                        <td>{d.exitStage ?? '–'}</td>
                         <td>{d.days}</td>
                       </tr>
                     ))}
