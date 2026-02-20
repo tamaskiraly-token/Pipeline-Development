@@ -12,6 +12,7 @@ import {
   LineChart,
   Line,
   ComposedChart,
+  Scatter,
 } from 'recharts'
 import { fetchDataFromGoogleSheets } from './utils/googleSheets'
 import './App.css'
@@ -247,6 +248,7 @@ function App() {
   const [cohortModal, setCohortModal] = useState(null) // { month, deals: [...] }
   const [salesCycleCohortModal, setSalesCycleCohortModal] = useState(null) // { month, deals: [...] }
   const [timeInStageCohortModal, setTimeInStageCohortModal] = useState(null) // { month, deals: [{ dealName, dealOwner, daysInStage }] }
+  const [timeInStageBarModal, setTimeInStageBarModal] = useState(null) // { stage, deals, avgDays, medianDays }
   const [timeInStageDealFilter, setTimeInStageDealFilter] = useState('all') // 'all' | 'converted' | 'notConverted'
   const [entryDateStart, setEntryDateStart] = useState('')
   const [entryDateEnd, setEntryDateEnd] = useState('')
@@ -1152,9 +1154,12 @@ function App() {
       if (cfg) stageToCol[cfg[1]] = col
     }
     const daysByStage = {}
-    STAGES_FOR_TIME.forEach(s => { daysByStage[s] = [] })
+    const dealsByStage = {}
+    STAGES_FOR_TIME.forEach(s => { daysByStage[s] = []; dealsByStage[s] = [] })
     data.rawRows.forEach(row => {
-      const key = `${String(row['Deal Name'] || '').trim()}|${String(row['Deal owner'] || '').trim()}`
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      const key = `${dealName}|${dealOwner}`
       if (dealsInEntryRangeSet && !dealsInEntryRangeSet.has(key)) return
       const isConverted = liveCol && row[liveCol] && String(row[liveCol]).trim() !== ''
       if (timeInStageDealFilter === 'converted' && !isConverted) return
@@ -1164,7 +1169,7 @@ function App() {
         const col = stageToCol[stage]
         if (col && row[col] && row[col].trim() !== '') {
           const d = parseDate(row[col])
-          if (d) entries.push({ stage, date: d })
+          if (d) entries.push({ stage, date: d, dateStr: row[col].trim() })
         }
       })
       entries.sort((a, b) => a.date - b.date)
@@ -1172,18 +1177,26 @@ function App() {
         const days = Math.round((entries[i + 1].date - entries[i].date) / (1000 * 60 * 60 * 24))
         if (days >= 0 && daysByStage[entries[i].stage]) {
           daysByStage[entries[i].stage].push(days)
+          dealsByStage[entries[i].stage].push({
+            dealName,
+            dealOwner,
+            entryDate: entries[i].dateStr,
+            exitDate: entries[i + 1].dateStr,
+            days,
+          })
         }
       }
     })
     return STAGES_FOR_TIME.map(stage => {
       const arr = daysByStage[stage] || []
-      if (arr.length === 0) return { stage, avgDays: null, count: 0, medianDays: null }
+      const deals = dealsByStage[stage] || []
+      if (arr.length === 0) return { stage, avgDays: null, count: 0, medianDays: null, deals: [] }
       const sorted = [...arr].sort((a, b) => a - b)
       const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
       const median = sorted.length % 2 === 0
         ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
         : sorted[Math.floor(sorted.length / 2)]
-      return { stage, avgDays: avg, count: arr.length, medianDays: median }
+      return { stage, avgDays: avg, count: arr.length, medianDays: median, deals }
     }).filter(s => s.count > 0)
   }, [data, pipeline, dealsInEntryRangeSet, timeInStageDealFilter])
 
@@ -1989,7 +2002,7 @@ function App() {
               <h3 className="conversion-subtitle">Summary by stage</h3>
               <div className="chart-inner" style={{ minHeight: 400 }}>
                 <ResponsiveContainer width="100%" height={400}>
-                  <BarChart
+                  <ComposedChart
                     data={timeInStageSummary}
                     layout="vertical"
                     margin={{ top: 16, right: 40, left: 120, bottom: 20 }}
@@ -2007,15 +2020,44 @@ function App() {
                       tick={{ fontSize: 11, fill: '#5c6b7a', fontFamily: "'DM Sans', sans-serif" }}
                     />
                     <Tooltip
-                      formatter={(value, name, { payload }) => [`${value} days (${payload?.count ?? 0} deals)`, payload?.stage ?? '']}
+                      formatter={(value, name, { payload }) => {
+                        if (name === 'Median') return [`${value} days`, 'Median']
+                        return [`${value} days (${payload?.count ?? 0} deals)`, payload?.stage ?? '']
+                      }}
                       contentStyle={{ fontFamily: "'DM Sans', sans-serif" }}
                     />
-                    <Bar dataKey="avgDays" fill="#06b6d4" name="Avg days" radius={[0, 4, 4, 0]}>
+                    <Bar
+                      dataKey="avgDays"
+                      fill="#06b6d4"
+                      name="Avg days"
+                      radius={[0, 4, 4, 0]}
+                      onClick={(data, index) => {
+                        const payload = timeInStageSummary[index]
+                        if (payload) setTimeInStageBarModal({ stage: payload.stage, deals: payload.deals ?? [], avgDays: payload.avgDays, medianDays: payload.medianDays })
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <LabelList dataKey="avgDays" position="right" style={{ fontSize: 11, fontWeight: 600 }} formatter={(v) => `${v}d`} />
                     </Bar>
-                  </BarChart>
+                    <Legend formatter={(value) => <span style={{ fontSize: 12, color: '#4a5568' }}>{value}</span>} />
+                    <Scatter
+                      dataKey="medianDays"
+                      fill="#e11d48"
+                      name="Median"
+                      shape="circle"
+                      r={5}
+                      onClick={(data, index) => {
+                        const payload = timeInStageSummary[index]
+                        if (payload) setTimeInStageBarModal({ stage: payload.stage, deals: payload.deals ?? [], avgDays: payload.avgDays, medianDays: payload.medianDays })
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              <p className="time-in-stage-chart-hint">
+                <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#e11d48', verticalAlign: 'middle' }} /> Median (click bar for details)</span>
+              </p>
               <div className="conversion-table-wrapper" style={{ marginTop: 24 }}>
                 <table className="conversion-table">
                   <thead>
@@ -2072,6 +2114,48 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Time in Stage Bar Details Modal */}
+      {timeInStageBarModal && (
+        <div className="modal-overlay" onClick={() => setTimeInStageBarModal(null)}>
+          <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Time in stage – {timeInStageBarModal.stage}</h3>
+              <button className="modal-close" onClick={() => setTimeInStageBarModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <div className="conversion-table-wrapper">
+                <table className="deal-table">
+                  <thead>
+                    <tr>
+                      <th>Deal Name</th>
+                      <th>Deal Owner</th>
+                      <th>Entered</th>
+                      <th>Exited</th>
+                      <th>Days</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...(timeInStageBarModal.deals ?? [])].sort((a, b) => a.days - b.days).map((d, i) => (
+                      <tr key={i}>
+                        <td>{d.dealName}</td>
+                        <td>{d.dealOwner}</td>
+                        <td>{d.entryDate ? formatDate(d.entryDate) : '–'}</td>
+                        <td>{d.exitDate ? formatDate(d.exitDate) : '–'}</td>
+                        <td>{d.days}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="time-in-stage-modal-summary">
+                <span><strong>Average:</strong> {timeInStageBarModal.avgDays ?? '–'} days</span>
+                <span><strong>Median:</strong> {timeInStageBarModal.medianDays ?? '–'} days</span>
+              </div>
+            </div>
           </div>
         </div>
       )}

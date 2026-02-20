@@ -893,6 +893,34 @@ body {
   min-width: 48px;
 }
 
+.time-in-stage-modal-summary {
+  display: flex;
+  gap: 24px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 14px;
+  color: #4a5568;
+}
+
+.time-in-stage-modal-summary strong {
+  margin-right: 6px;
+  color: #1a202c;
+}
+
+.time-in-stage-chart-hint {
+  font-size: 12px;
+  color: #718096;
+  margin-top: 8px;
+}
+
+.time-in-stage-chart-hint span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 16px;
+}
+
 .cohort-summary {
   margin: 0 0 16px 0;
   font-size: 14px;
