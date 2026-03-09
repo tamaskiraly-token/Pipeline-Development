@@ -17,6 +17,40 @@ import {
 import { fetchDataFromGoogleSheets } from './utils/googleSheets'
 import './App.css'
 
+// Tooltip help texts for metrics
+const METRIC_TOOLTIPS = {
+  performanceCount: 'Number of active deals in the chart end month, filtered by the applied filters (stage, owner, deal name, entry date).',
+  performanceAmount: 'Total deal value (USD) in the chart end month, for deals matching the applied filters.',
+  performanceMonthlyTx: 'Sum of expected monthly transactions (txns p.m.) for deals in the chart end month, filtered by applied filters.',
+  chartEndsAt: 'Last month shown in the chart. The chart displays 12 months ending at this date.',
+  dataTypeDeals: 'Show the number of active deals per stage at each month-end.',
+  dataTypeAmount: 'Show the total deal amount (USD) per stage at each month-end.',
+  dataTypeMonthlyTx: 'Show the total expected monthly transactions (txns p.m.) per stage at each month-end.',
+  overallConversionRate: 'Percentage of all deals that ever entered the pipeline and reached the Live stage. Measures end-to-end funnel efficiency.',
+  dealsConverted: 'Number of deals that reached the Live stage (conversion).',
+  totalDeals: 'Total number of deals that had any activity in this pipeline.',
+  dealsInStage: 'Deals that entered this stage. Used as the denominator for stage conversion (how many moved to next stage).',
+  progressed: 'Deals that moved from this stage to the next stage within the funnel.',
+  stageConversion: 'Percentage of deals in this stage that progressed to the next stage. Lower values indicate bottlenecks.',
+  overallConversion: 'Percentage of deals in this stage that eventually reached Live. Shows long-term conversion from this stage onward.',
+  monthlyConversionRate: 'Conversion rate for deals that entered the pipeline in this month (percent that reached Live).',
+  dealsEntered: 'Number of deals that entered the pipeline in this month.',
+  dealsWentLive: 'Number of deals from this month\'s cohort that reached the Live stage.',
+  cohortConversionRate: 'Conversion rate for deals that entered the pipeline in this month (percent that reached Live).',
+  cohortConverted: 'Deals from this cohort that reached the Live stage.',
+  avgDaysToLive: 'Average number of days from first pipeline activity to reaching the Live stage.',
+  medianDays: 'Median days to Live. Less affected by outliers than the average.',
+  dealsReachedLive: 'Number of deals that completed the funnel and reached Live (used for this metric).',
+  minMaxDays: 'Shortest and longest time (days) from pipeline entry to Live among converted deals.',
+  entryMonth: 'Month when the deal first appeared in the pipeline (earliest stage date).',
+  timeInStageAvg: 'Average days deals spend in this stage before moving to the next. Based on deals that progressed.',
+  timeInStageMedian: 'Median days in stage. Red dot on the bar; less influenced by outliers.',
+  pipelineMovements: 'Deals that changed stage (moved from one stage to another) in the selected month(s). "New" means the deal entered the pipeline in that month.',
+  showDealsAll: 'Include all deals that passed through stages (both converted and not converted).',
+  showDealsConverted: 'Only deals that reached the Live stage.',
+  showDealsNotConverted: 'Only deals that did not reach Live.',
+}
+
 // Company color palette – distinct colors for each stage
 const COLORS = {
   'Direct Sales': {
@@ -365,7 +399,8 @@ function daysBetween(dateStr1, dateStr2) {
 
 function App() {
   const [pipeline, setPipeline] = useState('Partner Management')
-  const [selectedMonth, setSelectedMonth] = useState(null)
+  const [chartEndMonth, setChartEndMonth] = useState(null) // end month for chart 12-month window; null = latest
+  const [selectedMonths, setSelectedMonths] = useState([]) // [] = latest month; non-empty = movements for those months
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -398,6 +433,8 @@ function App() {
 
   useEffect(() => {
     setIncludedStages([])
+    setChartEndMonth(null)
+    setSelectedMonths([])
     setSelectedOwners([])
     setSelectedDealNames([])
     setDealNameSearch('')
@@ -420,8 +457,8 @@ function App() {
     fetchDataFromGoogleSheets(sheetId, gid)
       .then((json) => {
         setData(json)
-        if (json.monthLabels?.length && !selectedMonth) {
-          setSelectedMonth(json.monthLabels[json.monthLabels.length - 1])
+        if (json.monthLabels?.length) {
+          setChartEndMonth(json.monthLabels[json.monthLabels.length - 1])
         }
       })
       .catch((err) => {
@@ -535,13 +572,15 @@ function App() {
   }, [chartData, data?.monthLabels, dealDetails, selectedOwners, selectedDealNames, includedStages, stages, dataType, dealEntryMap, entryDateStart, entryDateEnd])
 
   const rechartsData = useMemo(() => {
-    if (!selectedMonth || selectedMonth === 'all') return allRechartsData
-    const idx = data?.monthLabels?.indexOf(selectedMonth) ?? -1
-    if (idx < 0) return allRechartsData
+    const labels = data?.monthLabels ?? []
+    if (!labels.length) return allRechartsData ?? []
+    const endMonth = chartEndMonth ?? labels[labels.length - 1]
+    const idx = labels.indexOf(endMonth)
+    if (idx < 0) return allRechartsData ?? []
     const showMonths = 12
     const start = Math.max(0, idx - showMonths + 1)
-    return allRechartsData.slice(start, idx + 1)
-  }, [allRechartsData, selectedMonth, data?.monthLabels])
+    return (allRechartsData ?? []).slice(start, idx + 1)
+  }, [allRechartsData, chartEndMonth, data?.monthLabels])
 
   // Calculate interval for x-axis labels based on number of months
   const xAxisInterval = useMemo(() => {
@@ -558,7 +597,83 @@ function App() {
   )
   const colors = COLORS[pipeline] ?? {}
 
+  const performanceMetrics = useMemo(() => {
+    if (!dealDetails || !data?.monthLabels?.length) return null
+    const labels = data.monthLabels
+    const currMonth = chartEndMonth ?? labels[labels.length - 1]
+    const idx = labels.indexOf(currMonth)
+    if (idx < 0) return null
+    const prevMonth = idx > 0 ? labels[idx - 1] : null
+    const filteredStages = includedStages.length > 0 ? stages.filter((s) => includedStages.includes(s)) : stages
+    const ownerSet = selectedOwners?.length ? new Set(selectedOwners) : null
+    const dealNameSet = selectedDealNames?.length ? new Set(selectedDealNames) : null
+    const hasEntryFilter = !!(entryDateStart || entryDateEnd)
+    const matchDeal = (d) => {
+      if (ownerSet && !ownerSet.has(d.dealOwner)) return false
+      if (dealNameSet && !dealNameSet.has(d.dealName)) return false
+      if (hasEntryFilter && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return false
+      return true
+    }
+    const getMonthMetrics = (month) => {
+      const monthData = dealDetails[month] || {}
+      let count = 0
+      let amount = 0
+      let monthlyTx = 0
+      filteredStages.forEach((stage) => {
+        (monthData[stage] || []).forEach((d) => {
+          if (!matchDeal(d)) return
+          count += 1
+          amount += Number(d.amount) || 0
+          monthlyTx += Number(d.monthlyTransactions) || 0
+        })
+      })
+      return { count, amount, monthlyTransactions: monthlyTx }
+    }
+    const curr = getMonthMetrics(currMonth)
+    const prev = prevMonth ? getMonthMetrics(prevMonth) : { count: 0, amount: 0, monthlyTransactions: 0 }
+    return {
+      curr,
+      prev,
+      currMonth,
+      prevMonth,
+      change: {
+        count: curr.count - prev.count,
+        amount: curr.amount - prev.amount,
+        monthlyTransactions: curr.monthlyTransactions - prev.monthlyTransactions,
+      },
+      changePct: {
+        count: prev.count !== 0 ? ((curr.count - prev.count) / prev.count) * 100 : null,
+        amount: prev.amount !== 0 ? ((curr.amount - prev.amount) / prev.amount) * 100 : null,
+        monthlyTransactions: prev.monthlyTransactions !== 0 ? ((curr.monthlyTransactions - prev.monthlyTransactions) / prev.monthlyTransactions) * 100 : null,
+      },
+    }
+  }, [
+    dealDetails,
+    data?.monthLabels,
+    chartEndMonth,
+    stages,
+    includedStages,
+    selectedOwners,
+    selectedDealNames,
+    dealEntryMap,
+    entryDateStart,
+    entryDateEnd,
+  ])
+
   const selectAllStages = () => setIncludedStages([])
+
+  const selectAllMonths = () => setSelectedMonths([])
+
+  const toggleMonth = (month) => {
+    setSelectedMonths((prev) => {
+      const has = prev.includes(month)
+      if (has) {
+        const next = prev.filter((m) => m !== month)
+        return next
+      }
+      return [...prev, month]
+    })
+  }
 
   const toggleStageIncluded = (stage) => {
     setIncludedStages((prev) => {
@@ -616,24 +731,14 @@ function App() {
     })
   }
 
-  const monthOptions = useMemo(() => {
-    const labels = data?.monthLabels ?? []
-    return [
-      { value: 'all', label: 'All months' },
-      ...labels.map((m) => ({ value: m, label: formatMonthLabel(m) })).reverse(),
-    ]
-  }, [data?.monthLabels])
-
   const pipelineMovements = useMemo(() => {
     if (!dealDetails || !data?.monthLabels?.length) return []
     const labels = data.monthLabels
-    const targetMonth =
-      selectedMonth && selectedMonth !== 'all'
-        ? selectedMonth
-        : labels[labels.length - 1]
-    const idx = labels.indexOf(targetMonth)
-    if (idx < 0) return []
-    const prevMonth = idx > 0 ? labels[idx - 1] : null
+    const effectiveChartMonth = chartEndMonth ?? labels[labels.length - 1]
+    const targetMonths = selectedMonths?.length
+      ? selectedMonths
+      : effectiveChartMonth ? [effectiveChartMonth] : []
+
     const includeSet = includedStages?.length ? new Set(includedStages) : null
     const ownerSet = selectedOwners?.length ? new Set(selectedOwners) : null
     const dealNameSet = selectedDealNames?.length ? new Set(selectedDealNames) : null
@@ -642,45 +747,56 @@ function App() {
       : stages
 
     const entryDateFilterActive = !!(entryDateStart || entryDateEnd)
-    const prevStageByDeal = new Map()
-    if (prevMonth) {
-      const prevData = dealDetails[prevMonth] || {}
-      visibleStagesList.forEach((stage) => {
-        ;(prevData[stage] || []).forEach((d) => {
+
+    const allMovements = []
+    targetMonths.forEach((targetMonth) => {
+      const idx = labels.indexOf(targetMonth)
+      if (idx < 0) return
+      const prevMonth = idx > 0 ? labels[idx - 1] : null
+      const prevStageByDeal = new Map()
+      if (prevMonth) {
+        const prevData = dealDetails[prevMonth] || {}
+        visibleStagesList.forEach((stage) => {
+          ;(prevData[stage] || []).forEach((d) => {
+            if (ownerSet && !ownerSet.has(d.dealOwner)) return
+            if (dealNameSet && !dealNameSet.has(d.dealName)) return
+            if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
+            prevStageByDeal.set(`${d.dealName}\n${d.dealOwner}`, stage)
+          })
+        })
+      }
+
+      const currData = dealDetails[targetMonth] || {}
+      visibleStagesList.forEach((toStage) => {
+        ;(currData[toStage] || []).forEach((d) => {
           if (ownerSet && !ownerSet.has(d.dealOwner)) return
           if (dealNameSet && !dealNameSet.has(d.dealName)) return
           if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
-          prevStageByDeal.set(`${d.dealName}\n${d.dealOwner}`, stage)
-        })
-      })
-    }
-
-    const movements = []
-    const currData = dealDetails[targetMonth] || {}
-    visibleStagesList.forEach((toStage) => {
-      ;(currData[toStage] || []).forEach((d) => {
-        if (ownerSet && !ownerSet.has(d.dealOwner)) return
-        if (dealNameSet && !dealNameSet.has(d.dealName)) return
-        if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
-        const key = `${d.dealName}\n${d.dealOwner}`
-        const fromStage = prevStageByDeal.get(key)
-        if (fromStage === toStage) return
-        movements.push({
-          dealName: d.dealName,
-          dealOwner: d.dealOwner,
-          fromStage: fromStage || null,
-          toStage,
+          const key = `${d.dealName}\n${d.dealOwner}`
+          const fromStage = prevStageByDeal.get(key)
+          if (fromStage === toStage) return
+          allMovements.push({
+            dealName: d.dealName,
+            dealOwner: d.dealOwner,
+            fromStage: fromStage || null,
+            toStage,
+            month: targetMonth,
+          })
         })
       })
     })
-    return movements.sort((a, b) => {
+
+    return allMovements.sort((a, b) => {
+      const monthCmp = String(a.month || '').localeCompare(b.month || '')
+      if (monthCmp !== 0) return monthCmp
       if (a.toStage !== b.toStage) return String(a.toStage).localeCompare(b.toStage)
       return String(a.dealName).localeCompare(b.dealName)
     })
   }, [
     dealDetails,
     data?.monthLabels,
-    selectedMonth,
+    chartEndMonth,
+    selectedMonths,
     stages,
     includedStages,
     selectedOwners,
@@ -692,12 +808,13 @@ function App() {
 
   const movementsMonthLabel = useMemo(() => {
     if (!data?.monthLabels?.length) return null
-    const m =
-      selectedMonth && selectedMonth !== 'all'
-        ? selectedMonth
-        : data.monthLabels[data.monthLabels.length - 1]
-    return formatMonthLabel(m)
-  }, [data?.monthLabels, selectedMonth])
+    if (selectedMonths?.length === 0) {
+      const m = chartEndMonth ?? data.monthLabels[data.monthLabels.length - 1]
+      return formatMonthLabel(m)
+    }
+    if (selectedMonths?.length === 1) return formatMonthLabel(selectedMonths[0])
+    return selectedMonths.map(formatMonthLabel).join(', ')
+  }, [data?.monthLabels, chartEndMonth, selectedMonths])
 
   // Conversion metrics calculations - using raw data to track actual stage entries
   const overallConversion = useMemo(() => {
@@ -1475,17 +1592,17 @@ function App() {
             </button>
           </div>
           <div className="control-group">
-            <div className="filter-group">
-              <label htmlFor="month-select">Month:</label>
+            <div className="filter-group" title={METRIC_TOOLTIPS.chartEndsAt}>
+              <label htmlFor="chart-end-month">Chart ends at:</label>
               <select
-                id="month-select"
+                id="chart-end-month"
                 className="month-select"
-                value={selectedMonth ?? 'all'}
-                onChange={(e) => setSelectedMonth(e.target.value === 'all' ? 'all' : e.target.value)}
+                value={chartEndMonth ?? ''}
+                onChange={(e) => setChartEndMonth(e.target.value || null)}
               >
-                {monthOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                {(data?.monthLabels ?? []).slice().reverse().map((m) => (
+                  <option key={m} value={m}>
+                    {formatMonthLabel(m)}
                   </option>
                 ))}
               </select>
@@ -1496,18 +1613,21 @@ function App() {
                 <button
                   className={`tab ${dataType === 'count' ? 'tab-active' : ''}`}
                   onClick={() => setDataType('count')}
+                  title={METRIC_TOOLTIPS.dataTypeDeals}
                 >
                   # Deals
                 </button>
                 <button
                   className={`tab ${dataType === 'amount' ? 'tab-active' : ''}`}
                   onClick={() => setDataType('amount')}
+                  title={METRIC_TOOLTIPS.dataTypeAmount}
                 >
                   Amount
                 </button>
                 <button
                   className={`tab ${dataType === 'monthlyTransactions' ? 'tab-active' : ''}`}
                   onClick={() => setDataType('monthlyTransactions')}
+                  title={METRIC_TOOLTIPS.dataTypeMonthlyTx}
                 >
                   Monthly transactions
                 </button>
@@ -1710,7 +1830,7 @@ function App() {
       <main className="main app-content-width">
         <div className="card chart-card">
           <div className="section-header-with-insight">
-            <h2 className="card-title section-title">Deal Stage Breakdown</h2>
+            <h2 className="card-title section-title" title="Stacked column chart: number of active deals (or amount, or monthly transactions) per stage at each month-end.">Deal Stage Breakdown</h2>
             {rechartsData?.length > 0 && (
               <button
                 type="button"
@@ -1731,6 +1851,37 @@ function App() {
               : 'Stacked column chart showing the total monthly transactions (txns p.m.) by stage at each month-end.'}{' '}
             Bridge sequencing follows deal flow from early stages to Closed Won / Implementation / Live.
           </p>
+          {performanceMetrics && (
+            <div className="performance-cards">
+              <div className="performance-card" title={METRIC_TOOLTIPS.performanceCount}>
+                <div className="performance-card-label"># Deals</div>
+                <div className="performance-card-value">{formatNumber(performanceMetrics.curr.count)}</div>
+                <div className={`performance-card-change ${(performanceMetrics.change.count ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                  {performanceMetrics.change.count >= 0 ? '+' : ''}{performanceMetrics.change.count}
+                  {performanceMetrics.changePct.count != null && ` (${performanceMetrics.changePct.count >= 0 ? '+' : ''}${performanceMetrics.changePct.count.toFixed(1)}%)`}
+                  {performanceMetrics.prevMonth ? ` vs ${formatMonthLabel(performanceMetrics.prevMonth)}` : ''}
+                </div>
+              </div>
+              <div className="performance-card" title={METRIC_TOOLTIPS.performanceAmount}>
+                <div className="performance-card-label">Amount</div>
+                <div className="performance-card-value">{formatAmountShort(performanceMetrics.curr.amount)}</div>
+                <div className={`performance-card-change ${(performanceMetrics.change.amount ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                  {(performanceMetrics.change.amount ?? 0) >= 0 ? '+' : ''}{formatAmountShort(performanceMetrics.change.amount)}
+                  {performanceMetrics.changePct.amount != null && ` (${performanceMetrics.changePct.amount >= 0 ? '+' : ''}${performanceMetrics.changePct.amount.toFixed(1)}%)`}
+                  {performanceMetrics.prevMonth ? ` vs ${formatMonthLabel(performanceMetrics.prevMonth)}` : ''}
+                </div>
+              </div>
+              <div className="performance-card" title={METRIC_TOOLTIPS.performanceMonthlyTx}>
+                <div className="performance-card-label">Monthly transactions</div>
+                <div className="performance-card-value">{formatNumberShort(performanceMetrics.curr.monthlyTransactions)}</div>
+                <div className={`performance-card-change ${(performanceMetrics.change.monthlyTransactions ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                  {(performanceMetrics.change.monthlyTransactions ?? 0) >= 0 ? '+' : ''}{formatNumberShort(performanceMetrics.change.monthlyTransactions)}
+                  {performanceMetrics.changePct.monthlyTransactions != null && ` (${performanceMetrics.changePct.monthlyTransactions >= 0 ? '+' : ''}${performanceMetrics.changePct.monthlyTransactions.toFixed(1)}%)`}
+                  {performanceMetrics.prevMonth ? ` vs ${formatMonthLabel(performanceMetrics.prevMonth)}` : ''}
+                </div>
+              </div>
+            </div>
+          )}
           <div className="chart-inner" style={{ minHeight: window.innerWidth <= 768 ? 500 : 750 }}>
             {!rechartsData?.length ? (
               <div className="loading">No data to display.</div>
@@ -1833,7 +1984,7 @@ function App() {
           </div>
 
           {movementsMonthLabel && (
-            <div className="movements-section">
+            <div className="movements-section" title={METRIC_TOOLTIPS.pipelineMovements}>
               <div className="section-header-with-insight">
                 <h3 className="movements-title section-title">
                   Pipeline movements – {movementsMonthLabel}
@@ -1850,17 +2001,62 @@ function App() {
                   </button>
                 )}
               </div>
+              <div className="movements-month-filter">
+                <div className="filter-dropdown">
+                  <button
+                    className="filter-dropdown-btn"
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setFilterOpen((f) => (f === 'month' ? null : 'month')); }}
+                  >
+                    Months: {selectedMonths.length === 0 ? 'Same as chart' : `${selectedMonths.length} selected`} ▾
+                  </button>
+                  {filterOpen === 'month' && (
+                    <div className="filter-dropdown-panel filter-dropdown-panel--tall" onClick={(e) => e.stopPropagation()}>
+                      <span className="filter-hint">Show movements for:</span>
+                      <label className="filter-check">
+                        <input
+                          type="checkbox"
+                          checked={selectedMonths.length === 0}
+                          onChange={() => selectAllMonths()}
+                        />
+                        Same as chart (Chart end month)
+                      </label>
+                      {(data?.monthLabels ?? []).slice().reverse().map((m) => (
+                        <label key={m} className="filter-check">
+                          <input
+                            type="checkbox"
+                            checked={selectedMonths.length === 0 ? false : selectedMonths.includes(m)}
+                            onChange={() => toggleMonth(m)}
+                          />
+                          {formatMonthLabel(m)}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
               <p className="movements-desc">
-                Deals that changed stage in this month (from → to).
+                Deals that changed stage {selectedMonths?.length > 1 ? 'in the selected months' : 'in this month'} (from → to).
               </p>
               {pipelineMovements.length === 0 ? (
-                <p className="movements-empty">No stage changes in this month.</p>
+                <p className="movements-empty">No stage changes {selectedMonths?.length > 1 ? 'in the selected months' : 'in this month'}.</p>
               ) : (
                 <div className="movements-list">
+                  {selectedMonths?.length > 1 && (
+                    <div className="movement-header">
+                      <span className="movement-deal">Deal</span>
+                      <span className="movement-owner">Owner</span>
+                      <span className="movement-month-header">Month</span>
+                      <span className="movement-arrow-header">Stage change</span>
+                    </div>
+                  )}
                   {pipelineMovements.map((m, i) => (
                     <div key={i} className="movement-item">
                       <span className="movement-deal" title={m.dealName}>{m.dealName}</span>
                       <span className="movement-owner">{m.dealOwner}</span>
+                      {selectedMonths?.length > 1 && m.month && (
+                        <span className="movement-month">{formatMonthLabel(m.month)}</span>
+                      )}
                       <span className="movement-arrow">
                         {m.fromStage ? (
                           <>
@@ -1885,13 +2081,13 @@ function App() {
       {overallConversion && (
         <div className="conversion-section app-content-width">
           <div className="card">
-            <h2 className="card-title">Funnel Conversion Metrics</h2>
+            <h2 className="card-title" title="Analysis of how deals progress through stages. A deal is converted when it reaches the Live stage.">Funnel Conversion Metrics</h2>
             <p className="card-desc">
               Conversion analysis showing how deals progress through the funnel. A deal is considered converted when it reaches the "Live" stage.
             </p>
             
             {/* Overall Conversion */}
-            <div className="conversion-overall">
+            <div className="conversion-overall" title={METRIC_TOOLTIPS.overallConversionRate}>
               <div className="section-header-with-insight">
                 <h3 className="conversion-subtitle section-title">Overall Conversion Rate</h3>
                 <button
@@ -1905,15 +2101,15 @@ function App() {
                 </button>
               </div>
               <div className="conversion-stats">
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.overallConversionRate}>
                   <div className="conversion-stat-value">{overallConversion.conversionRate}%</div>
                   <div className="conversion-stat-label">Conversion Rate</div>
                 </div>
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.dealsConverted}>
                   <div className="conversion-stat-value">{overallConversion.convertedDeals}</div>
                   <div className="conversion-stat-label">Deals Converted</div>
                 </div>
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.totalDeals}>
                   <div className="conversion-stat-value">{overallConversion.totalDeals}</div>
                   <div className="conversion-stat-label">Total Deals</div>
                 </div>
@@ -1922,7 +2118,7 @@ function App() {
 
             {/* Stage-by-Stage Conversion */}
             {stageConversion.length > 0 && (
-              <div className="conversion-stages">
+              <div className="conversion-stages" title="Shows how many deals progress from each stage to the next. Stage Conversion = % moved forward; Overall Conversion = % that eventually reached Live.">
                 <div className="section-header-with-insight">
                   <h3 className="conversion-subtitle section-title">Stage-by-Stage Conversion</h3>
                   <button
@@ -1940,10 +2136,10 @@ function App() {
                     <thead>
                       <tr>
                         <th>Stage</th>
-                        <th>Deals in Stage</th>
-                        <th>Progressed</th>
-                        <th>Stage Conversion</th>
-                        <th>Overall Conversion</th>
+                        <th title={METRIC_TOOLTIPS.dealsInStage}>Deals in Stage</th>
+                        <th title={METRIC_TOOLTIPS.progressed}>Progressed</th>
+                        <th title={METRIC_TOOLTIPS.stageConversion}>Stage Conversion</th>
+                        <th title={METRIC_TOOLTIPS.overallConversion}>Overall Conversion</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1972,7 +2168,7 @@ function App() {
 
             {/* Monthly Conversion Trends */}
             {monthlyConversionTrends.length > 0 && (
-              <div className="conversion-trends">
+              <div className="conversion-trends" title="Conversion rate and deals going Live by entry month. Shows how each month's cohort performed.">
                 <div className="section-header-with-insight">
                   <h3 className="conversion-subtitle section-title">Monthly Conversion Trends</h3>
                   <button
@@ -2041,7 +2237,7 @@ function App() {
 
             {/* Cohort Conversion */}
             {cohortConversion.length > 0 && (
-              <div className="conversion-cohorts">
+              <div className="conversion-cohorts" title="Deals grouped by the month they entered the pipeline. Conversion Rate = % of that cohort that reached Live.">
                 <div className="section-header-with-insight">
                   <h3 className="conversion-subtitle section-title">Cohort Conversion Analysis</h3>
                   <button
@@ -2058,10 +2254,10 @@ function App() {
                   <table className="conversion-table">
                     <thead>
                       <tr>
-                        <th>Entry Month</th>
-                        <th>Total Deals</th>
-                        <th>Converted</th>
-                        <th>Conversion Rate</th>
+                        <th title={METRIC_TOOLTIPS.entryMonth}>Entry Month</th>
+                        <th title={METRIC_TOOLTIPS.totalDeals}>Total Deals</th>
+                        <th title={METRIC_TOOLTIPS.cohortConverted}>Converted</th>
+                        <th title={METRIC_TOOLTIPS.cohortConversionRate}>Conversion Rate</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2090,12 +2286,12 @@ function App() {
       {overallSalesCycle && (
         <div className="conversion-section app-content-width">
           <div className="card">
-            <h2 className="card-title">Sales Cycle Analysis</h2>
+            <h2 className="card-title" title="Measures how long it takes for deals to move from first pipeline stage to Live.">Sales Cycle Analysis</h2>
             <p className="card-desc">
               Average time from first pipeline stage to Live. Measures how long it takes for deals to complete the funnel.
             </p>
             
-            <div className="conversion-overall">
+            <div className="conversion-overall" title={METRIC_TOOLTIPS.avgDaysToLive}>
               <div className="section-header-with-insight">
                 <h3 className="conversion-subtitle section-title">Overall Sales Cycle</h3>
                 <button
@@ -2109,19 +2305,19 @@ function App() {
                 </button>
               </div>
               <div className="conversion-stats">
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.avgDaysToLive}>
                   <div className="conversion-stat-value">{overallSalesCycle.avgDays}</div>
                   <div className="conversion-stat-label">Avg days to Live</div>
                 </div>
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.medianDays}>
                   <div className="conversion-stat-value">{overallSalesCycle.medianDays}</div>
                   <div className="conversion-stat-label">Median days</div>
                 </div>
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.dealsReachedLive}>
                   <div className="conversion-stat-value">{overallSalesCycle.count}</div>
                   <div className="conversion-stat-label">Deals (reached Live)</div>
                 </div>
-                <div className="conversion-stat">
+                <div className="conversion-stat" title={METRIC_TOOLTIPS.minMaxDays}>
                   <div className="conversion-stat-value">{overallSalesCycle.minDays} – {overallSalesCycle.maxDays}</div>
                   <div className="conversion-stat-label">Min – Max days</div>
                 </div>
@@ -2131,7 +2327,7 @@ function App() {
             {salesCycleCohorts.length > 0 && (
               <>
                 <div className="conversion-trends">
-                  <div className="section-header-with-insight">
+                  <div className="section-header-with-insight" title={METRIC_TOOLTIPS.avgDaysToLive}>
                     <h3 className="conversion-subtitle section-title">Avg days to Live by entry month</h3>
                     <button
                       type="button"
@@ -2178,7 +2374,7 @@ function App() {
                 </div>
 
                 <div className="conversion-cohorts">
-                  <div className="section-header-with-insight">
+                  <div className="section-header-with-insight" title="Avg days from pipeline entry to Live, grouped by entry month. Click a row to see individual deals.">
                     <h3 className="conversion-subtitle section-title">Sales cycle by entry cohort</h3>
                     <button
                       type="button"
@@ -2192,17 +2388,17 @@ function App() {
                   </div>
                   <div className="conversion-table-wrapper">
                     <table className="conversion-table">
-                      <thead>
-                        <tr>
-                          <th>Entry Month</th>
-                          <th>Deals</th>
-                          <th>Avg days</th>
-                          <th>Median days</th>
-                          <th>Min – Max</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {salesCycleCohorts.map((c, i) => (
+                    <thead>
+                      <tr>
+                        <th title={METRIC_TOOLTIPS.entryMonth}>Entry Month</th>
+                        <th>Deals</th>
+                        <th title={METRIC_TOOLTIPS.avgDaysToLive}>Avg days</th>
+                        <th title={METRIC_TOOLTIPS.medianDays}>Median days</th>
+                        <th title={METRIC_TOOLTIPS.minMaxDays}>Min – Max</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesCycleCohorts.map((c, i) => (
                           <tr key={i} className="cohort-row" onClick={() => handleSalesCycleCohortClick(c)} style={{ cursor: 'pointer' }}>
                             <td>{formatMonthLabel(c.month)}</td>
                             <td>{c.count}</td>
@@ -2225,7 +2421,7 @@ function App() {
       {timeInStageSummary.length > 0 && (
         <div className="conversion-section app-content-width">
           <div className="card">
-            <h2 className="card-title">Average Time in Deal Stages</h2>
+            <h2 className="card-title" title="How many days deals spend in each stage before moving to the next. Based on deals that progressed.">Average Time in Deal Stages</h2>
             <p className="card-desc">
               How many days deals typically spend in each stage before moving to the next. Based on deals that progressed through consecutive stages.
             </p>
@@ -2236,25 +2432,28 @@ function App() {
                 <button
                   className={`tab ${timeInStageDealFilter === 'all' ? 'tab-active' : ''}`}
                   onClick={() => setTimeInStageDealFilter('all')}
+                  title={METRIC_TOOLTIPS.showDealsAll}
                 >
                   All
                 </button>
                 <button
                   className={`tab ${timeInStageDealFilter === 'converted' ? 'tab-active' : ''}`}
                   onClick={() => setTimeInStageDealFilter('converted')}
+                  title={METRIC_TOOLTIPS.showDealsConverted}
                 >
                   Converted only
                 </button>
                 <button
                   className={`tab ${timeInStageDealFilter === 'notConverted' ? 'tab-active' : ''}`}
                   onClick={() => setTimeInStageDealFilter('notConverted')}
+                  title={METRIC_TOOLTIPS.showDealsNotConverted}
                 >
                   Not converted
                 </button>
               </div>
             </div>
             
-            <div className="conversion-overall">
+            <div className="conversion-overall" title={METRIC_TOOLTIPS.timeInStageAvg}>
               <div className="section-header-with-insight">
                 <h3 className="conversion-subtitle section-title">Summary by stage</h3>
                 <button
@@ -2326,12 +2525,12 @@ function App() {
                 <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#e11d48', verticalAlign: 'middle' }} /> Median (click bar for details)</span>
               </p>
               <div className="conversion-table-wrapper" style={{ marginTop: 24 }}>
-                <table className="conversion-table">
+                  <table className="conversion-table">
                   <thead>
                     <tr>
                       <th>Stage</th>
-                      <th>Avg days</th>
-                      <th>Median days</th>
+                      <th title={METRIC_TOOLTIPS.timeInStageAvg}>Avg days</th>
+                      <th title={METRIC_TOOLTIPS.timeInStageMedian}>Median days</th>
                       <th>Deals</th>
                     </tr>
                   </thead>
@@ -2350,7 +2549,7 @@ function App() {
             </div>
 
             {timeInStageCohorts.length > 0 && (
-              <div className="conversion-cohorts">
+              <div className="conversion-cohorts" title="Each cell shows avg days in that stage for deals entering the pipeline in that month. Click a row for per-deal breakdown.">
                 <div className="section-header-with-insight">
                   <h3 className="conversion-subtitle section-title">Time in stage by entry cohort</h3>
                   <button
