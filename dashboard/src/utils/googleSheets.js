@@ -259,6 +259,27 @@ function countAtMonthEnds(rows, pipelineType, monthEnds) {
 }
 
 /**
+ * Get value from row by column name; tries exact key then case-insensitive match (handles sheet header variants)
+ */
+function getRowNumber(row, preferredKeys) {
+  const keys = Array.isArray(preferredKeys) ? preferredKeys : [preferredKeys]
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+      const n = parseFloat(row[key])
+      if (!Number.isNaN(n)) return n
+    }
+  }
+  const headerLower = keys[0].toLowerCase()
+  for (const header of Object.keys(row)) {
+    if (header.trim().toLowerCase() === headerLower) {
+      const n = parseFloat(row[header])
+      if (!Number.isNaN(n)) return n
+    }
+  }
+  return 0
+}
+
+/**
  * Build deal-level details for each (month, stage)
  */
 function buildDealDetails(rows, pipelineType, monthEnds) {
@@ -285,7 +306,9 @@ function buildDealDetails(rows, pipelineType, monthEnds) {
     const dealName = String(row['Deal Name'] || '').trim()
     const dealOwner = String(row['Deal owner'] || '').trim()
     const amount = parseFloat(row['Amount in company currency'] || 0) || 0
-    const monthlyTransactions = parseFloat(row['Expected usage (txns p.m.)'] || 0) || 0
+    const monthlyTransactions = pipelineType === 'Partner Management'
+      ? getRowNumber(row, ['Monthly transactions', 'Monthly Transactions'])
+      : (getRowNumber(row, ['Expected usage (txns p.m.)']) || getRowNumber(row, ['Monthly transactions', 'Monthly Transactions']))
 
     monthEnds.forEach((monthEnd) => {
       const { stage, date } = getStageAtDate(row, colToStage, monthEnd)

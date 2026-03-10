@@ -728,8 +728,35 @@ function App() {
       month,
       deals: sortedDeals,
       needsRefresh: !dealDetails,
+      sortBy: 'amount',
+      sortDir: 'desc',
     })
   }
+
+  const modalSortedDeals = useMemo(() => {
+    if (!modal?.deals?.length) return modal?.deals ?? []
+    const sortBy = modal.sortBy || 'amount'
+    const sortDir = modal.sortDir || 'desc'
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...modal.deals].sort((a, b) => {
+      switch (sortBy) {
+        case 'dealName':
+          return dir * String(a.dealName || '').localeCompare(b.dealName || '')
+        case 'dealStage':
+          return dir * String(a.dealStage || '').localeCompare(b.dealStage || '')
+        case 'dealOwner':
+          return dir * String(a.dealOwner || '').localeCompare(b.dealOwner || '')
+        case 'dateEnteredStage':
+          return dir * String(a.dateEnteredStage || '').localeCompare(b.dateEnteredStage || '')
+        case 'amount':
+          return dir * ((a.amount || 0) - (b.amount || 0))
+        case 'monthlyTransactions':
+          return dir * ((Number(a.monthlyTransactions) || 0) - (Number(b.monthlyTransactions) || 0))
+        default:
+          return 0
+      }
+    })
+  }, [modal?.deals, modal?.sortBy, modal?.sortDir])
 
   const pipelineMovements = useMemo(() => {
     if (!dealDetails || !data?.monthLabels?.length) return []
@@ -2833,6 +2860,43 @@ function App() {
               <button className="modal-close" onClick={() => setModal(null)} aria-label="Close">×</button>
             </div>
             <div className="modal-body">
+              {modal.deals.length > 0 && (
+                <div className="modal-sort-bar">
+                  <span className="modal-sort-label">Sort by:</span>
+                  <div className="modal-sort-buttons">
+                    {[
+                      { key: 'dealName', label: 'Deal Name' },
+                      { key: 'dealStage', label: 'Deal Stage' },
+                      { key: 'dealOwner', label: 'Owner' },
+                      { key: 'dateEnteredStage', label: 'Date' },
+                      { key: 'amount', label: 'Amount' },
+                      { key: 'monthlyTransactions', label: 'Monthly transactions' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`modal-sort-btn ${modal.sortBy === key ? 'active' : ''}`}
+                        onClick={() => setModal((m) => ({
+                          ...m,
+                          sortBy: key,
+                          sortDir: m?.sortBy === key && m?.sortDir === 'desc' ? 'asc' : 'desc',
+                        }))}
+                      >
+                        {label}
+                        {modal.sortBy === key && (modal.sortDir === 'asc' ? ' ↑' : ' ↓')}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="modal-sort-toggle"
+                    onClick={() => setModal((m) => ({ ...m, sortDir: m?.sortDir === 'asc' ? 'desc' : 'asc' }))}
+                    title={modal.sortDir === 'asc' ? 'Descending' : 'Ascending'}
+                  >
+                    {modal.sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'}
+                  </button>
+                </div>
+              )}
               <table className="deal-table">
                 <thead>
                   <tr>
@@ -2845,7 +2909,7 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {modal.deals.map((d, i) => (
+                  {(modalSortedDeals || modal.deals || []).map((d, i) => (
                     <tr key={i}>
                       <td>{d.dealName}</td>
                       <td>{d.dealStage}</td>
