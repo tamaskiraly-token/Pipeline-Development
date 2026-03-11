@@ -421,6 +421,7 @@ function App() {
   const [timeInStageDealFilter, setTimeInStageDealFilter] = useState('all') // 'all' | 'converted' | 'notConverted'
   const [entryDateStart, setEntryDateStart] = useState('')
   const [entryDateEnd, setEntryDateEnd] = useState('')
+  const [flowTooltip, setFlowTooltip] = useState(null) // { label, deals: [{ dealName, dealOwner, month }], x, y }
   
   useEffect(() => {
     const updateChartHeight = () => {
@@ -842,6 +843,89 @@ function App() {
     if (selectedMonths?.length === 1) return formatMonthLabel(selectedMonths[0])
     return selectedMonths.map(formatMonthLabel).join(', ')
   }, [data?.monthLabels, chartEndMonth, selectedMonths])
+
+  // Aggregated pipeline movements for Sankey-style diagram (from → to, count, deals)
+  const movementsSankeyData = useMemo(() => {
+    if (!pipelineMovements?.length || !stages?.length) return null
+    const linkMap = new Map() // key -> { count, deals: [] }
+    pipelineMovements.forEach((m) => {
+      const from = m.fromStage || 'New'
+      const to = m.toStage
+      const key = `${from}\t${to}`
+      if (!linkMap.has(key)) linkMap.set(key, { count: 0, deals: [] })
+      const entry = linkMap.get(key)
+      entry.count += 1
+      entry.deals.push({ dealName: m.dealName, dealOwner: m.dealOwner, month: m.month })
+    })
+    const links = Array.from(linkMap.entries()).map(([key, { count, deals }]) => {
+      const [from, to] = key.split('\t')
+      return { from, to, count, deals }
+    })
+    if (links.length === 0) return null
+    const fromSet = new Set(links.map((l) => l.from))
+    const toSet = new Set(links.map((l) => l.to))
+    const fromNodes = (fromSet.has('New') ? ['New'] : []).concat(stages.filter((s) => fromSet.has(s)))
+    const toNodes = stages.filter((s) => toSet.has(s))
+    const totalCount = links.reduce((sum, l) => sum + l.count, 0)
+    const diagramHeight = 320
+    const scale = totalCount > 0 ? diagramHeight / totalCount : 0
+
+    const leftNodeTotals = new Map()
+    const rightNodeTotals = new Map()
+    links.forEach((l) => {
+      leftNodeTotals.set(l.from, (leftNodeTotals.get(l.from) || 0) + l.count)
+      rightNodeTotals.set(l.to, (rightNodeTotals.get(l.to) || 0) + l.count)
+    })
+
+    const leftNodeHeights = new Map(fromNodes.map((n) => [n, (leftNodeTotals.get(n) || 0) * scale]))
+    const rightNodeHeights = new Map(toNodes.map((n) => [n, (rightNodeTotals.get(n) || 0) * scale]))
+
+    let leftY = 0
+    const leftYStart = new Map()
+    fromNodes.forEach((n) => {
+      leftYStart.set(n, leftY)
+      leftY += leftNodeHeights.get(n) || 0
+    })
+
+    let rightY = 0
+    const rightYStart = new Map()
+    toNodes.forEach((n) => {
+      rightYStart.set(n, rightY)
+      rightY += rightNodeHeights.get(n) || 0
+    })
+
+    // Order links: by from (order of fromNodes), then by to (order of toNodes)
+    const fromOrder = new Map(fromNodes.map((n, i) => [n, i]))
+    const toOrder = new Map(toNodes.map((n, i) => [n, i]))
+    links.sort((a, b) => {
+      const f = fromOrder.get(a.from) - fromOrder.get(b.from)
+      if (f !== 0) return f
+      return toOrder.get(a.to) - toOrder.get(b.to)
+    })
+
+    const leftRunningY = new Map(fromNodes.map((n) => [n, leftYStart.get(n)]))
+    const rightRunningY = new Map(toNodes.map((n) => [n, rightYStart.get(n)]))
+
+    const linksWithLayout = links.map((l) => {
+      const fromY = leftRunningY.get(l.from)
+      const toY = rightRunningY.get(l.to)
+      const h = l.count * scale
+      leftRunningY.set(l.from, fromY + h)
+      rightRunningY.set(l.to, rightRunningY.get(l.to) + h)
+      return { ...l, fromY, toY, height: h }
+    })
+
+    return {
+      fromNodes,
+      toNodes,
+      links: linksWithLayout,
+      leftNodeHeights,
+      rightNodeHeights,
+      leftYStart,
+      rightYStart,
+      diagramHeight,
+    }
+  }, [pipelineMovements, stages])
 
   // Conversion metrics calculations - using raw data to track actual stage entries
   const overallConversion = useMemo(() => {
@@ -2011,7 +2095,7 @@ function App() {
           </div>
 
           {movementsMonthLabel && (
-            <div className="movements-section" title={METRIC_TOOLTIPS.pipelineMovements}>
+            <div className="movements-section">
               <div className="section-header-with-insight">
                 <h3 className="movements-title section-title">
                   Pipeline movements – {movementsMonthLabel}
@@ -2065,6 +2149,135 @@ function App() {
               <p className="movements-desc">
                 Deals that changed stage {selectedMonths?.length > 1 ? 'in the selected months' : 'in this month'} (from → to).
               </p>
+              {movementsSankeyData && pipelineMovements.length > 0 && (
+                <div
+                  className="movements-flow-diagram"
+                  aria-label="Pipeline flow diagram"
+                  onMouseMove={(e) => {
+                    if (flowTooltip) setFlowTooltip((prev) => prev && { ...prev, x: e.clientX, y: e.clientY })
+                  }}
+                  onMouseLeave={() => setFlowTooltip(null)}
+                >
+                  <svg className="movements-flow-svg" viewBox={`0 0 ${620} ${movementsSankeyData.diagramHeight + 36}`} preserveAspectRatio="xMidYMid meet">
+                    {(() => {
+                      const labelW = 140
+                      const nodeW = 24
+                      const leftColX = labelW
+                      const rightColX = 620 - labelW - nodeW
+                      const leftX = leftColX + nodeW
+                      const rightX = rightColX
+                      const ctrlX = (leftX + rightX) / 2
+                      const topPad = 18
+                      const getColor = (node) => (node === 'New' ? '#48bb78' : (colors[node] || '#94a3b8'))
+                      return (
+                        <g>
+                          {movementsSankeyData.links.map((link, i) => {
+                            const { from, to, fromY, toY, height, deals } = link
+                            const color = getColor(from)
+                            const y1 = fromY + topPad
+                            const y2 = toY + topPad
+                            const h = Math.max(height, 2)
+                            const path = `M ${leftX} ${y1} C ${ctrlX} ${y1} ${ctrlX} ${y2} ${rightX} ${y2} L ${rightX} ${y2 + h} C ${ctrlX} ${y2 + h} ${ctrlX} ${y1 + h} ${leftX} ${y1 + h} Z`
+                            const label = `${from} → ${to}`
+                            return (
+                              <path
+                                key={i}
+                                d={path}
+                                fill={color}
+                                fillOpacity={0.85}
+                                className="movements-flow-link"
+                                onMouseEnter={(e) => setFlowTooltip({ label, deals: deals || [], x: e.clientX, y: e.clientY })}
+                              />
+                            )
+                          })}
+                          {movementsSankeyData.fromNodes.map((n) => {
+                            const y = movementsSankeyData.leftYStart.get(n) + topPad
+                            const h = movementsSankeyData.leftNodeHeights.get(n) || 0
+                            if (h < 1) return null
+                            const nodeDeals = (movementsSankeyData.links.filter((l) => l.from === n) || []).flatMap((l) => l.deals || [])
+                            const label = `From: ${n === 'New' ? 'New' : n}`
+                            return (
+                              <rect
+                                key={`L-${n}`}
+                                x={leftColX}
+                                y={y}
+                                width={nodeW}
+                                height={h}
+                                fill={getColor(n)}
+                                rx={2}
+                                className="movements-flow-node"
+                                onMouseEnter={(e) => setFlowTooltip({ label, deals: nodeDeals, x: e.clientX, y: e.clientY })}
+                              />
+                            )
+                          })}
+                          {movementsSankeyData.toNodes.map((n) => {
+                            const y = movementsSankeyData.rightYStart.get(n) + topPad
+                            const h = movementsSankeyData.rightNodeHeights.get(n) || 0
+                            if (h < 1) return null
+                            const nodeDeals = (movementsSankeyData.links.filter((l) => l.to === n) || []).flatMap((l) => l.deals || [])
+                            const label = `To: ${n}`
+                            return (
+                              <rect
+                                key={`R-${n}`}
+                                x={rightColX}
+                                y={y}
+                                width={nodeW}
+                                height={h}
+                                fill={colors[n] || '#94a3b8'}
+                                rx={2}
+                                className="movements-flow-node"
+                                onMouseEnter={(e) => setFlowTooltip({ label, deals: nodeDeals, x: e.clientX, y: e.clientY })}
+                              />
+                            )
+                          })}
+                          {movementsSankeyData.fromNodes.map((n) => {
+                            const y = movementsSankeyData.leftYStart.get(n) + topPad
+                            const h = movementsSankeyData.leftNodeHeights.get(n) || 0
+                            return (
+                              <text key={`Lt-${n}`} x={leftColX - 6} y={y + h / 2} dy="0.35em" className="movements-flow-label movements-flow-label-left" textAnchor="end">{n === 'New' ? 'New' : n}</text>
+                            )
+                          })}
+                          {movementsSankeyData.toNodes.map((n) => {
+                            const y = movementsSankeyData.rightYStart.get(n) + topPad
+                            const h = movementsSankeyData.rightNodeHeights.get(n) || 0
+                            return (
+                              <text key={`Rt-${n}`} x={rightColX + nodeW + 6} y={y + h / 2} dy="0.35em" className="movements-flow-label movements-flow-label-right" textAnchor="start">{n}</text>
+                            )
+                          })}
+                        </g>
+                      )
+                    })()}
+                  </svg>
+                  {flowTooltip && (
+                    <div
+                      className="movements-flow-tooltip"
+                      style={{
+                        left: flowTooltip.x + 320 + 16 > (typeof window !== 'undefined' ? window.innerWidth : 9999) ? flowTooltip.x - 324 : flowTooltip.x + 12,
+                        top: flowTooltip.y + 200 > (typeof window !== 'undefined' ? window.innerHeight : 9999) ? flowTooltip.y - 8 - 200 : flowTooltip.y + 8,
+                      }}
+                      role="tooltip"
+                    >
+                      <div className="movements-flow-tooltip-title">{flowTooltip.label}</div>
+                      <div className="movements-flow-tooltip-count">{flowTooltip.deals.length} deal{flowTooltip.deals.length !== 1 ? 's' : ''}</div>
+                      <ul className="movements-flow-tooltip-list">
+                        {flowTooltip.deals.slice(0, 15).map((d, idx) => (
+                          <li key={idx} className="movements-flow-tooltip-item">
+                            <span className="movements-flow-tooltip-deal" title={d.dealName}>{d.dealName}</span>
+                            <span className="movements-flow-tooltip-owner">{d.dealOwner}</span>
+                            {selectedMonths?.length > 1 && d.month && (
+                              <span className="movements-flow-tooltip-month">{formatMonthLabel(d.month)}</span>
+                            )}
+                          </li>
+                        ))}
+                        {flowTooltip.deals.length > 15 && (
+                          <li className="movements-flow-tooltip-more">+{flowTooltip.deals.length - 15} more</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                  <p className="movements-flow-legend">Flow width = number of deals. Hover over a flow or stage to see deal names and details.</p>
+                </div>
+              )}
               {pipelineMovements.length === 0 ? (
                 <p className="movements-empty">No stage changes {selectedMonths?.length > 1 ? 'in the selected months' : 'in this month'}.</p>
               ) : (
