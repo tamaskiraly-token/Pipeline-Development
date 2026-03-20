@@ -161,6 +161,7 @@ function computeChartFromDealDetails(dealDetails, monthLabels, stages, selectedO
 }
 
 function formatMonthLabel(ym) {
+  if (ym === 'current') return 'Current'
   if (!ym || ym === 'all') return ym
   const [y, m] = ym.split('-')
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -427,6 +428,8 @@ function App() {
   const [passwordInput, setPasswordInput] = useState('')
   const [passwordError, setPasswordError] = useState(null)
 
+  const CURRENT_MONTH_KEY = 'current'
+
   const handleUnlock = async () => {
     if (isUnlocking) return
     setIsUnlocking(true)
@@ -604,6 +607,140 @@ function App() {
     return toRechartsFormat(chartData ?? [], data?.monthLabels ?? [], includedStages)
   }, [chartData, data?.monthLabels, dealDetails, selectedOwners, selectedDealNames, includedStages, stages, dataType, dealEntryMap, entryDateStart, entryDateEnd])
 
+  // Extra point for "current state" (not necessarily month-end).
+  // Computed from rawRows using the latest known stage date as of Google Sheets' last modification time.
+  const sheetLastModifiedDate = useMemo(() => {
+    if (!data?.sheetLastModified) return null
+    const d = parseDate(data.sheetLastModified)
+    return d && !Number.isNaN(d.getTime()) ? d : null
+  }, [data?.sheetLastModified])
+
+  const sheetLastModifiedLabel = useMemo(() => {
+    if (!data?.sheetLastModified) return null
+    return formatDate(data.sheetLastModified)
+  }, [data?.sheetLastModified])
+
+  const nowDate = useMemo(() => sheetLastModifiedDate || new Date(), [sheetLastModifiedDate])
+  const currentDealDetails = useMemo(() => {
+    if (!data?.rawRows?.length || !stages?.length) return null
+    const colToStage = pipeline === 'Direct Sales' ? data?.colToStageDS : data?.colToStagePM
+    if (!colToStage) return null
+
+    const results = {}
+    stages.forEach((s) => { results[s] = [] })
+
+    const getRowNumber = (row, preferredKeys) => {
+      const keys = Array.isArray(preferredKeys) ? preferredKeys : [preferredKeys]
+      for (const key of keys) {
+        if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+          const n = parseFloat(row[key])
+          if (!Number.isNaN(n)) return n
+        }
+      }
+      const headerLower = keys[0].toLowerCase()
+      for (const header of Object.keys(row)) {
+        if (header.trim().toLowerCase() === headerLower) {
+          const n = parseFloat(row[header])
+          if (!Number.isNaN(n)) return n
+        }
+      }
+      return 0
+    }
+
+    data.rawRows.forEach((row) => {
+      const dealName = String(row['Deal Name'] || '').trim()
+      const dealOwner = String(row['Deal owner'] || '').trim()
+      if (!dealName) return
+
+      const candidates = []
+      for (const [col, stage] of Object.entries(colToStage)) {
+        const dateStr = row[col]
+        if (dateStr && String(dateStr).trim() !== '') {
+          const date = parseDate(String(dateStr))
+          if (date && date <= nowDate) {
+            // Normalize stage naming (googleSheets uses a shortName for PM stages,
+            // which can contain an extra space like `Qualified/ Proposal`).
+            // The chart uses the displayName (`Qualified/Proposal`), so we align here.
+            const normalizedStage = stage?.replace(/\/\s+/g, '/')
+            candidates.push({ stage: normalizedStage, date })
+          }
+        }
+      }
+
+      if (!candidates.length) return
+      candidates.sort((a, b) => b.date - a.date)
+      const { stage, date } = candidates[0]
+      if (!stage || !results[stage]) return
+
+      const amount = parseFloat(row['Amount in company currency'] || 0) || 0
+      const monthlyTransactions = pipeline === 'Partner Management'
+        ? getRowNumber(row, ['Monthly transactions', 'Monthly Transactions'])
+        : (getRowNumber(row, ['Expected usage (txns p.m.)']) || getRowNumber(row, ['Monthly transactions', 'Monthly Transactions']))
+
+      const dateEnteredStage = date
+        ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+        : ''
+
+      results[stage].push({
+        dealName,
+        dealStage: stage,
+        dealOwner,
+        dateEnteredStage,
+        amount,
+        monthlyTransactions,
+      })
+    })
+
+    return results
+  }, [data?.rawRows, data?.colToStageDS, data?.colToStagePM, pipeline, stages, nowDate])
+
+  const currentNowPoint = useMemo(() => {
+    if (!currentDealDetails) return null
+
+    const ownerSet = selectedOwners?.length ? new Set(selectedOwners) : null
+    const dealNameSet = selectedDealNames?.length ? new Set(selectedDealNames) : null
+    const hasEntryFilter = !!(entryDateStart || entryDateEnd)
+    const includeSet = includedStages?.length ? new Set(includedStages) : null
+    const stagesOrder = includeSet ? stages.filter((s) => includeSet.has(s)) : stages
+
+    const point = { month: CURRENT_MONTH_KEY }
+    let total = 0
+    let topStage = stagesOrder[stagesOrder.length - 1]
+
+    stages.forEach((stage) => {
+      point[stage] = 0
+      if (includeSet && !includeSet.has(stage)) return
+      const deals = currentDealDetails[stage] || []
+      let value = 0
+      deals.forEach((d) => {
+        if (ownerSet && !ownerSet.has(d.dealOwner)) return
+        if (dealNameSet && !dealNameSet.has(d.dealName)) return
+        if (hasEntryFilter && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
+        if (dataType === 'amount') value += Number(d.amount) || 0
+        else if (dataType === 'monthlyTransactions') value += Number(d.monthlyTransactions) || 0
+        else value += 1
+      })
+      point[stage] = value
+      total += value
+      if (value > 0) topStage = stage
+    })
+
+    point.total = total
+    point._topStage = topStage
+    return point
+  }, [
+    currentDealDetails,
+    selectedOwners,
+    selectedDealNames,
+    includedStages,
+    stages,
+    dataType,
+    dealEntryMap,
+    entryDateStart,
+    entryDateEnd,
+    CURRENT_MONTH_KEY,
+  ])
+
   const rechartsData = useMemo(() => {
     const labels = data?.monthLabels ?? []
     if (!labels.length) return allRechartsData ?? []
@@ -612,17 +749,19 @@ function App() {
     if (idx < 0) return allRechartsData ?? []
     const showMonths = 12
     const start = Math.max(0, idx - showMonths + 1)
-    return (allRechartsData ?? []).slice(start, idx + 1)
-  }, [allRechartsData, chartEndMonth, data?.monthLabels])
+    const base = (allRechartsData ?? []).slice(start, idx + 1)
+    if (currentNowPoint) return [...base, currentNowPoint]
+    return base
+  }, [allRechartsData, chartEndMonth, data?.monthLabels, currentNowPoint])
 
   // Calculate interval for x-axis labels based on number of months
   const xAxisInterval = useMemo(() => {
-    const monthCount = rechartsData?.length || 0
+    const monthCount = (rechartsData?.length || 0) - (currentNowPoint ? 1 : 0)
     if (monthCount <= 6) return 0 // Show all labels
     if (monthCount <= 12) return 0 // Show all labels
     if (monthCount <= 18) return 1 // Show every other label
     return 2 // Show every third label
-  }, [rechartsData])
+  }, [rechartsData, currentNowPoint])
 
   const visibleStages = useMemo(
     () => (includedStages.length === 0 ? stages : stages.filter((s) => includedStages.includes(s))),
@@ -738,7 +877,7 @@ function App() {
     const payload = data?.payload ?? data
     const month = payload?.month ?? data?.month
     if (!month) return
-    const monthData = dealDetails?.[month]
+    const monthData = month === CURRENT_MONTH_KEY ? currentDealDetails : dealDetails?.[month]
     const filteredStages = visibleStages.length ? visibleStages : stages
     const rawDeals = monthData
       ? filteredStages.flatMap((stage) => monthData[stage] ?? [])
@@ -760,7 +899,7 @@ function App() {
     setModal({
       month,
       deals: sortedDeals,
-      needsRefresh: !dealDetails,
+      needsRefresh: month === CURRENT_MONTH_KEY ? false : !dealDetails,
       sortBy: 'amount',
       sortDir: 'desc',
     })
@@ -795,6 +934,7 @@ function App() {
     if (!dealDetails || !data?.monthLabels?.length) return []
     const labels = data.monthLabels
     const effectiveChartMonth = chartEndMonth ?? labels[labels.length - 1]
+    const lastMonthLabel = labels[labels.length - 1]
     const targetMonths = selectedMonths?.length
       ? selectedMonths
       : effectiveChartMonth ? [effectiveChartMonth] : []
@@ -810,9 +950,14 @@ function App() {
 
     const allMovements = []
     targetMonths.forEach((targetMonth) => {
+      const isCurrentTarget = targetMonth === lastMonthLabel
       const idx = labels.indexOf(targetMonth)
-      if (idx < 0) return
-      const prevMonth = idx > 0 ? labels[idx - 1] : null
+      if (!isCurrentTarget && idx < 0) return
+      // For the latest month, we want "last full month -> current state".
+      // So:
+      // - prevStage = stage at end of `targetMonth` (month-end of Feb, etc.)
+      // - toStage = stage as of "now" (currentDealDetails)
+      const prevMonth = isCurrentTarget ? targetMonth : (idx > 0 ? labels[idx - 1] : null)
       const prevStageByDeal = new Map()
       if (prevMonth) {
         const prevData = dealDetails[prevMonth] || {}
@@ -826,9 +971,12 @@ function App() {
         })
       }
 
-      const currData = dealDetails[targetMonth] || {}
       visibleStagesList.forEach((toStage) => {
-        ;(currData[toStage] || []).forEach((d) => {
+        const currDeals = isCurrentTarget
+          ? (currentDealDetails?.[toStage] || [])
+          : (dealDetails[targetMonth]?.[toStage] || [])
+
+        ;(currDeals || []).forEach((d) => {
           if (ownerSet && !ownerSet.has(d.dealOwner)) return
           if (dealNameSet && !dealNameSet.has(d.dealName)) return
           if (entryDateFilterActive && !isDealInEntryRange(d, dealEntryMap, entryDateStart || null, entryDateEnd || null)) return
@@ -840,6 +988,8 @@ function App() {
             dealOwner: d.dealOwner,
             fromStage: fromStage || null,
             toStage,
+            // Keep the "month" label as the last full month (e.g. Feb),
+            // even though toStage reflects the current state.
             month: targetMonth,
           })
         })
@@ -864,6 +1014,7 @@ function App() {
     dealEntryMap,
     entryDateStart,
     entryDateEnd,
+    currentDealDetails,
   ])
 
   const movementsMonthLabel = useMemo(() => {
@@ -872,7 +1023,9 @@ function App() {
       const m = chartEndMonth ?? data.monthLabels[data.monthLabels.length - 1]
       return formatMonthLabel(m)
     }
-    if (selectedMonths?.length === 1) return formatMonthLabel(selectedMonths[0])
+    if (selectedMonths?.length === 1) {
+      return formatMonthLabel(selectedMonths[0])
+    }
     return selectedMonths.map(formatMonthLabel).join(', ')
   }, [data?.monthLabels, chartEndMonth, selectedMonths])
 
@@ -2031,6 +2184,12 @@ function App() {
               : 'Stacked column chart showing the total monthly transactions (txns p.m.) by stage at each month-end.'}{' '}
             Bridge sequencing follows deal flow from early stages to Closed Won / Implementation / Live.
           </p>
+            {currentNowPoint && (
+              <div className="current-state-note">
+                Current state = deal stage as of{' '}
+                <strong>{sheetLastModifiedLabel || formatDate(nowDate.toISOString())}</strong>.
+              </div>
+            )}
           {performanceMetrics && (
             <div className="performance-cards">
               <div className="performance-card" title={METRIC_TOOLTIPS.performanceCount}>
