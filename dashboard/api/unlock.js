@@ -15,8 +15,19 @@ export default async function handler(req, res) {
     return
   }
 
-  const body = req.body || {}
-  const password = body.password
+  // Vercel serverless may provide `req.body` as an object (parsed JSON),
+  // or sometimes as a string depending on runtime/settings.
+  let password = undefined
+  const body = req.body
+  if (body && typeof body === 'object') {
+    password = body.password
+  } else if (typeof body === 'string') {
+    try {
+      password = JSON.parse(body)?.password
+    } catch {
+      password = undefined
+    }
+  }
 
   // Simple / quick setup:
   // Keep the password check on the server side, but do not rely on env vars.
