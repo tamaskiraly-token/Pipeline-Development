@@ -422,6 +422,34 @@ function App() {
   const [entryDateStart, setEntryDateStart] = useState('')
   const [entryDateEnd, setEntryDateEnd] = useState('')
   const [flowTooltip, setFlowTooltip] = useState(null) // { label, deals: [{ dealName, dealOwner, month }], x, y }
+  const [isUnlocked, setIsUnlocked] = useState(false)
+  const [isUnlocking, setIsUnlocking] = useState(false)
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordError, setPasswordError] = useState(null)
+
+  const handleUnlock = async () => {
+    if (isUnlocking) return
+    setIsUnlocking(true)
+    setPasswordError(null)
+    try {
+      const res = await fetch('/api/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput }),
+      })
+      if (res.ok) {
+        setIsUnlocked(true)
+        setPasswordInput('')
+        setPasswordError(null)
+        return
+      }
+      setPasswordError('Incorrect password. Please try again.')
+    } catch {
+      setPasswordError('Unable to verify password. Please try again.')
+    } finally {
+      setIsUnlocking(false)
+    }
+  }
   
   useEffect(() => {
     const updateChartHeight = () => {
@@ -452,6 +480,10 @@ function App() {
   }, [filterOpen])
 
   useEffect(() => {
+    if (!isUnlocked) return
+    setLoading(true)
+    setError(null)
+
     const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1FhenanldXBkesfIrWUXksMyjJgoYK-_em4DLUcMcSGE'
     const gid = import.meta.env.VITE_GOOGLE_SHEET_GID || '0'
     
@@ -467,7 +499,7 @@ function App() {
         setError(err.message || 'Failed to load data from Google Sheets')
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [isUnlocked])
 
   const chartData =
     pipeline === 'Direct Sales' ? data?.chartDataDS : data?.chartDataPM
@@ -1652,6 +1684,43 @@ function App() {
         return { month, stageStats, deals: c.deals }
       })
   }, [data, pipeline, dealsInEntryRangeSet, entryDateStart, entryDateEnd, timeInStageDealFilter])
+
+  if (!isUnlocked) {
+    return (
+      <div className="password-protect-overlay" role="dialog" aria-modal="true" aria-label="Password protection">
+        <div className="password-protect-card">
+          <h2 className="password-protect-title">Enter password</h2>
+          <p className="password-protect-subtitle">Only after successful entry can you view the dashboard data.</p>
+          <div className="password-protect-input-row">
+            <input
+              type="password"
+              className="password-protect-input"
+              value={passwordInput}
+              onChange={(e) => {
+                setPasswordInput(e.target.value)
+                setPasswordError(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleUnlock()
+              }}
+              placeholder="Password"
+              autoFocus
+              aria-label="Password"
+            />
+            <button
+              type="button"
+              className="password-protect-btn"
+              onClick={handleUnlock}
+              disabled={isUnlocking}
+            >
+              {isUnlocking ? 'Unlocking...' : 'Unlock'}
+            </button>
+          </div>
+          {passwordError && <div className="password-protect-error">{passwordError}</div>}
+        </div>
+      </div>
+    )
+  }
 
   if (loading) return <div className="loading">Loading data from Google Sheets…</div>
   if (error) {

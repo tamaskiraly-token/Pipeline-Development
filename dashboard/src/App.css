@@ -9,6 +9,86 @@ body {
   color: #1a202c;
 }
 
+/* Password protection overlay (shown on app open) */
+.password-protect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(26, 32, 44, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.password-protect-card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 18px 16px 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.password-protect-title {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a202c;
+}
+
+.password-protect-subtitle {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: #718096;
+}
+
+.password-protect-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.password-protect-input {
+  flex: 1;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  padding: 0 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.password-protect-input:focus {
+  border-color: #5a67d8;
+  box-shadow: 0 0 0 3px rgba(90, 103, 216, 0.18);
+}
+
+.password-protect-btn {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid #5a67d8;
+  background: #5a67d8;
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.password-protect-btn:hover {
+  background: #4f5dc9;
+}
+
+.password-protect-error {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #e53e3e;
+  font-weight: 600;
+}
+
 .app {
   min-height: 100vh;
   padding: 20px 24px;
