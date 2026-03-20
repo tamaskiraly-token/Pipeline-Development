@@ -1,5 +1,3 @@
-import * as crypto from 'node:crypto'
-
 /**
  * POST /api/unlock
  * Body: { password: string }
@@ -38,10 +36,7 @@ export default async function handler(req, res) {
     return
   }
 
-  const a = Buffer.from(password, 'utf8')
-  const b = Buffer.from(expected, 'utf8')
-  const ok = a.length === b.length ? crypto.timingSafeEqual(a, b) : false
-
+  const ok = password === expected
   if (!ok) {
     res.status(401).json({ ok: false })
     return

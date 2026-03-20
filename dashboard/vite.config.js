@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -32,9 +31,7 @@ const devUnlockMiddleware = {
           return
         }
 
-        const a = Buffer.from(password, 'utf8')
-        const b = Buffer.from(DASHBOARD_PASSWORD, 'utf8')
-        const ok = a.length === b.length ? crypto.timingSafeEqual(a, b) : false
+        const ok = password === DASHBOARD_PASSWORD
 
         res.statusCode = ok ? 200 : 401
         res.setHeader('Content-Type', 'application/json')
