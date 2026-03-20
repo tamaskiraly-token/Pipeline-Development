@@ -375,6 +375,15 @@ export async function fetchDataFromGoogleSheets(sheetId, gid = '0') {
       throw new Error(`Failed to fetch Google Sheets: ${response.statusText}`)
     }
 
+    // Best-effort: browsers may not expose some headers due to CORS.
+    // If available, this lets the UI label the "Current" column.
+    const lastModifiedRaw = response.headers.get('Last-Modified') || null
+    const lastModifiedDate = (() => {
+      if (!lastModifiedRaw) return null
+      const d = new Date(lastModifiedRaw)
+      return Number.isNaN(d.getTime()) ? null : d.toISOString()
+    })()
+
     const csvText = await response.text()
     const rows = parseCSV(csvText)
 
@@ -416,6 +425,8 @@ export async function fetchDataFromGoogleSheets(sheetId, gid = '0') {
       rawRows: rows, // Include raw rows for conversion calculations
       colToStageDS,
       colToStagePM,
+      sheetLastModified: lastModifiedDate,
+      sheetLastModifiedRaw: lastModifiedRaw,
     }
   } catch (error) {
     console.error('Error fetching from Google Sheets:', error)
