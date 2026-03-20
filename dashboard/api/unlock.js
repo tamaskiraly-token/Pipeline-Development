@@ -18,11 +18,9 @@ export default async function handler(req, res) {
   const body = req.body || {}
   const password = body.password
 
-  const expected = process.env.DASHBOARD_PASSWORD
-  if (!expected) {
-    res.status(500).json({ ok: false, error: 'Server not configured' })
-    return
-  }
+  // Simple / quick setup:
+  // Keep the password check on the server side, but do not rely on env vars.
+  const expected = 'pipeline2026'
 
   if (typeof password !== 'string' || password.length === 0) {
     res.status(400).json({ ok: false, error: 'Missing password' })
